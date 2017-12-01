@@ -370,7 +370,16 @@ name = "icarust"
 version = "0.1.0"
 dependencies = [
  "ggez 0.3.3",
+ "icarust-derive 0.1.0",
  "rand 0.3.18 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "icarust-derive"
+version = "0.1.0"
+dependencies = [
+ "quote 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn 0.11.11 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@
 //! The idea is that this game is simple but still
 //! non-trivial enough to be interesting.
 
+#[macro_use] extern crate icarust_derive;
 extern crate ggez;
 extern crate rand;
 use ggez::audio;
@@ -14,15 +15,10 @@ use ggez::timer;
 use std::env;
 use std::path;
 
-/// *********************************************************************
-/// Basic stuff, make some helpers for vector functions.
-/// ggez includes the nalgebra math library to provide lots of
-/// math stuff, we just fill in a couple gaps.
-/// **********************************************************************
 use ggez::graphics::{Vector2, Point2};
-use ggez::nalgebra as na;
 
-
+mod actors;
+use actors::*;
 
 /// Create a unit vector representing the
 /// given angle (in radians)
@@ -40,85 +36,9 @@ fn random_vec(max_magnitude: f32) -> Vector2 {
     vec_from_angle(angle) * (mag)
 }
 
-
-/// *********************************************************************
-/// Now we define our Actor's.
-/// An Actor is anything in the game world.
-/// We're not *quite* making a real entity-component system but it's
-/// pretty close.  For a more complicated game you would want a
-/// real ECS, but for this it's enough to say that all our game objects
-/// contain pretty much the same data.
-/// **********************************************************************
-#[derive(Debug)]
-enum ActorType {
-    Player,
-    Rock,
-    Shot,
-}
-
-#[derive(Debug)]
-struct Actor {
-    tag: ActorType,
-    pos: Point2,
-    facing: f32,
-    velocity: Vector2,
-    rvel: f32,
-    bbox_size: f32,
-
-    // I am going to lazily overload "life" with a
-    // double meaning:
-    // for shots, it is the time left to live,
-    // for players and rocks, it is the actual hit points.
-    life: f32,
-}
-
-const PLAYER_LIFE: f32 = 1.0;
-const SHOT_LIFE: f32 = 2.0;
-const ROCK_LIFE: f32 = 1.0;
-
-const PLAYER_BBOX: f32 = 12.0;
-const ROCK_BBOX: f32 = 12.0;
-const SHOT_BBOX: f32 = 6.0;
-
 /// *********************************************************************
 /// Now we have some initializer functions for different game objects.
 /// **********************************************************************
-
-fn create_player() -> Actor {
-    Actor {
-        tag: ActorType::Player,
-        pos: Point2::origin(),
-        facing: 0.,
-        velocity: na::zero(),
-        rvel: 0.,
-        bbox_size: PLAYER_BBOX,
-        life: PLAYER_LIFE,
-    }
-}
-
-fn create_rock() -> Actor {
-    Actor {
-        tag: ActorType::Rock,
-        pos: Point2::origin(),
-        facing: 0.,
-        velocity: na::zero(),
-        rvel: 0.,
-        bbox_size: ROCK_BBOX,
-        life: ROCK_LIFE,
-    }
-}
-
-fn create_shot() -> Actor {
-    Actor {
-        tag: ActorType::Shot,
-        pos: Point2::origin(),
-        facing: 0.,
-        velocity: na::zero(),
-        rvel: SHOT_RVEL,
-        bbox_size: SHOT_BBOX,
-        life: SHOT_LIFE,
-    }
-}
 
 const MAX_ROCK_VEL: f32 = 50.0;
 
@@ -128,14 +48,14 @@ const MAX_ROCK_VEL: f32 = 50.0;
 /// Note that this *could* create rocks outside the
 /// bounds of the playing field, so it should be
 /// called before `wrap_actor_position()` happens.
-fn create_rocks(num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Actor> {
+fn create_rocks(num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Rock> {
     assert!(max_radius > min_radius);
     let new_rock = |_| {
         let mut rock = create_rock();
         let r_angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
         let r_distance = rand::random::<f32>() * (max_radius - min_radius) + min_radius;
-        rock.pos = exclusion + vec_from_angle(r_angle) * r_distance;
-        rock.velocity = random_vec(MAX_ROCK_VEL);
+        rock.set_position(exclusion + vec_from_angle(r_angle) * r_distance);
+        rock.set_velocity(random_vec(MAX_ROCK_VEL));
         rock
     };
     (0..num).map(new_rock).collect()
@@ -152,7 +72,6 @@ fn create_rocks(num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -
 /// **********************************************************************
 
 const SHOT_SPEED: f32 = 200.0;
-const SHOT_RVEL: f32 = 0.1;
 const SPRITE_SIZE: u32 = 32;
 
 // Acceleration in pixels per second, more or less.
@@ -163,56 +82,58 @@ const PLAYER_TURN_RATE: f32 = 3.05;
 const PLAYER_SHOT_TIME: f32 = 0.5;
 
 
-fn player_handle_input(actor: &mut Actor, input: &InputState, dt: f32) {
-    actor.facing += dt * PLAYER_TURN_RATE * input.xaxis;
+fn player_handle_input<T: Actor>(actor: &mut T, input: &InputState, dt: f32) {
+    actor.add_facing(dt * PLAYER_TURN_RATE * input.xaxis);
 
     if input.yaxis > 0.0 {
         player_thrust(actor, dt);
     }
 }
 
-fn player_thrust(actor: &mut Actor, dt: f32) {
-    let direction_vector = vec_from_angle(actor.facing);
+fn player_thrust<T: Actor>(actor: &mut T, dt: f32) {
+    let direction_vector = vec_from_angle(actor.facing());
     let thrust_vector = direction_vector * (PLAYER_THRUST);
-    actor.velocity += thrust_vector * (dt);
+    actor.add_velocity(thrust_vector * (dt));
 }
 
 const MAX_PHYSICS_VEL: f32 = 250.0;
 
-fn update_actor_position(actor: &mut Actor, dt: f32) {
+fn update_actor_position<T: Actor>(actor: &mut T, dt: f32) {
     // Clamp the velocity to the max efficiently
-    let norm_sq = actor.velocity.norm_squared();
+    let norm_sq = actor.velocity().norm_squared();
     if norm_sq > MAX_PHYSICS_VEL.powi(2) {
-        actor.velocity = actor.velocity / norm_sq.sqrt() * MAX_PHYSICS_VEL;
+        let new_velocity = actor.velocity() / norm_sq.sqrt() * MAX_PHYSICS_VEL;
+        actor.set_velocity(new_velocity);
     }
-    let dv = actor.velocity * (dt);
-    actor.pos += dv;
-    actor.facing += actor.rvel;
+    let dv = actor.velocity() * (dt);
+    let new_position = actor.position() + dv;
+    actor.set_position(new_position);
+    actor.rotate();
 }
 
 /// Takes an actor and wraps its position to the bounds of the
 /// screen, so if it goes off the left side of the screen it
 /// will re-enter on the right side and so on.
-fn wrap_actor_position(actor: &mut Actor, sx: f32, sy: f32) {
+fn wrap_actor_position<T: Actor>(actor: &mut T, sx: f32, sy: f32) {
     // Wrap screen
     let screen_x_bounds = sx / 2.0;
     let screen_y_bounds = sy / 2.0;
     let sprite_half_size = (SPRITE_SIZE / 2) as f32;
-    let actor_center = actor.pos - Vector2::new(-sprite_half_size, sprite_half_size);
+    let actor_center = actor.position() - Vector2::new(-sprite_half_size, sprite_half_size);
     if actor_center.x > screen_x_bounds {
-        actor.pos.x -= sx;
+        actor.add_x(-sx);
     } else if actor_center.x < -screen_x_bounds {
-        actor.pos.x += sx;
+        actor.add_x(sx);
     };
     if actor_center.y > screen_y_bounds {
-        actor.pos.y -= sy;
+        actor.add_y(-sy);
     } else if actor_center.y < -screen_y_bounds {
-        actor.pos.y += sy;
+        actor.add_y(sy);
     }
 }
 
-fn handle_timed_life(actor: &mut Actor, dt: f32) {
-    actor.life -= dt;
+fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
+	actor.add_life(-dt)
 }
 
 
@@ -267,8 +188,8 @@ impl Assets {
            })
     }
 
-    fn actor_image(&mut self, actor: &Actor) -> &mut graphics::Image {
-        match actor.tag {
+    fn actor_image<T: Actor>(&mut self, actor: &T) -> &mut graphics::Image {
+        match actor.tag() {
             ActorType::Player => &mut self.player_image,
             ActorType::Rock => &mut self.rock_image,
             ActorType::Shot => &mut self.shot_image,
@@ -310,9 +231,9 @@ impl Default for InputState {
 /// **********************************************************************
 
 struct MainState {
-    player: Actor,
-    shots: Vec<Actor>,
-    rocks: Vec<Actor>,
+    player: Player,
+    shots: Vec<Shot>,
+    rocks: Vec<Rock>,
     level: i32,
     score: i32,
     assets: Assets,
@@ -340,7 +261,7 @@ impl MainState {
         let level_disp = graphics::Text::new(ctx, "level", &assets.font)?;
 
         let player = create_player();
-        let rocks = create_rocks(5, player.pos, 100.0, 250.0);
+        let rocks = create_rocks(5, player.position(), 100.0, 250.0);
 
         let s = MainState {
             player: player,
@@ -366,11 +287,10 @@ impl MainState {
 
         let player = &self.player;
         let mut shot = create_shot();
-        shot.pos = player.pos;
-        shot.facing = player.facing;
-        let direction = vec_from_angle(shot.facing);
-        shot.velocity.x = SHOT_SPEED * direction.x;
-        shot.velocity.y = SHOT_SPEED * direction.y;
+        shot.set_position(player.position());
+        shot.set_facing(player.facing());
+        let direction = vec_from_angle(shot.facing());
+		shot.set_velocity_xy(SHOT_SPEED * direction.x, SHOT_SPEED * direction.y);
 
         self.shots.push(shot);
         let _ = self.assets.shot_sound.play();
@@ -379,25 +299,20 @@ impl MainState {
 
 
     fn clear_dead_stuff(&mut self) {
-        self.shots.retain(|s| s.life > 0.0);
-        self.rocks.retain(|r| r.life > 0.0);
+        self.shots.retain(|s| s.life() > 0.0);
+        self.rocks.retain(|r| r.life() > 0.0);
     }
 
     fn handle_collisions(&mut self) {
         for rock in &mut self.rocks {
-            let pdistance = rock.pos - self.player.pos;
-            if pdistance.norm() < (self.player.bbox_size + rock.bbox_size) {
-                self.player.life = 0.0;
-            }
+            self.player.check_collision(rock);
+            
             for shot in &mut self.shots {
-                let distance = shot.pos - rock.pos;
-                if distance.norm() < (shot.bbox_size + rock.bbox_size) {
-                    shot.life = 0.0;
-                    rock.life = 0.0;
+               if shot.check_collision(rock) {
                     self.score += 1;
                     self.gui_dirty = true;
                     let _ = self.assets.hit_sound.play();
-                }
+               }
             }
         }
     }
@@ -406,7 +321,7 @@ impl MainState {
         if self.rocks.is_empty() {
             self.level += 1;
             self.gui_dirty = true;
-            let r = create_rocks(self.level + 5, self.player.pos, 100.0, 250.0);
+            let r = create_rocks(self.level + 5, self.player.position(), 100.0, 250.0);
             self.rocks.extend(r);
         }
     }
@@ -437,19 +352,19 @@ fn print_instructions() {
 }
 
 
-fn draw_actor(assets: &mut Assets,
+fn draw_actor<T: Actor>(assets: &mut Assets,
               ctx: &mut Context,
-              actor: &Actor,
+              actor: &T,
               world_coords: (u32, u32))
               -> GameResult<()> {
     let (screen_w, screen_h) = world_coords;
-    let pos = world_to_screen_coords(screen_w, screen_h, actor.pos);
+    let pos = world_to_screen_coords(screen_w, screen_h, actor.position());
     // let pos = Vector2::new(1.0, 1.0);
     let px = pos.x as f32;
     let py = pos.y as f32;
     let dest_point = graphics::Point2::new(px, py);
     let image = assets.actor_image(actor);
-    graphics::draw(ctx, image, dest_point, actor.facing as f32)
+    graphics::draw(ctx, image, dest_point, actor.facing() as f32)
 
 }
 
@@ -512,7 +427,7 @@ impl EventHandler for MainState {
             // Finally we check for our end state.
             // I want to have a nice death screen eventually,
             // but for now we just quit.
-            if self.player.life <= 0.0 {
+            if self.player.life() <= 0.0 {
                 println!("Game over!");
                 let _ = ctx.quit();
             }
@@ -607,18 +522,13 @@ impl EventHandler for MainState {
     }
 }
 
-/// **********************************************************************
-/// Finally our main function!  Which merely sets up a config and calls
-/// `ggez::event::run()` with our `EventHandler` type.
-/// **********************************************************************
-
 pub fn main() {
     let mut c = conf::Conf::new();
     c.window_title = "Astroblasto!".to_string();
     c.window_mode.width = 640;
     c.window_mode.height = 480;
 
-    let ctx = &mut Context::load_from_conf("astroblasto", "ggez", c).unwrap();
+    let ctx = &mut Context::load_from_conf("icarust", "ggez", c).unwrap();
 
     // We add the CARGO_MANIFEST_DIR/resources do the filesystems paths so
     // we we look in the cargo project for files.
@@ -628,7 +538,7 @@ pub fn main() {
         ctx.filesystem.mount(&path, true);
         println!("Adding path {:?}", path);
     } else {
-        println!("aie?");
+        println!("No manifest directory; cannot load resources.");
     }
 
     match MainState::new(ctx) {
