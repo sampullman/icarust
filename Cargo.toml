@@ -6,3 +6,6 @@ authors = ["Sam Pullman <sampullman@gmail.com>"]
 [dependencies.ggez]
 path = "../libraries/ggez/"
 version = "0.3.3"
+
+[dependencies]
+rand = "0.3"
