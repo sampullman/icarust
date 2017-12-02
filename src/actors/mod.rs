@@ -39,7 +39,9 @@ pub struct Rock {
 }
 
 pub trait Actor: Sized {
+
     fn tag(&self) -> ActorType;
+
     fn position(&self) -> Point2;
 	fn set_position(&mut self, pos: Point2);
     fn add_position(&mut self, pos: Point2);
@@ -55,6 +57,7 @@ pub trait Actor: Sized {
         let new_y = self.y() + y;
         self.set_y(new_y)
     }
+
 	fn velocity(&self) -> Vector2;
     fn set_velocity_xy(&mut self, x: f32, y: f32);
     fn set_velocity(&mut self, vel: Vector2);
@@ -62,19 +65,23 @@ pub trait Actor: Sized {
         let new_vel = self.velocity() + vel;
         self.set_velocity(new_vel)
     }
+
     fn facing(&self) -> f32;
 	fn set_facing(&mut self, facing: f32);
     fn add_facing(&mut self, facing: f32) {
         let new_facing = self.facing() + facing;
         self.set_facing(new_facing)
     }
+
     fn bbox_size(&self) -> f32;
+
 	fn life(&self) -> f32;
 	fn set_life(&mut self, life: f32);
 	fn add_life(&mut self, life: f32) {
         let new_life = self.life() + life;
         self.set_life(new_life)
     }
+
     fn rvel(&self) -> f32;
     fn rotate(&mut self) {
         let rvel = self.rvel();
