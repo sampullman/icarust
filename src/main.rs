@@ -19,34 +19,13 @@ use ggez::graphics::{Vector2, Point2};
 
 mod actors;
 use actors::*;
+use actors::player::{create_player, Player};
 
 mod util;
 use util::*;
 
-/// *********************************************************************
-/// Now we have some initializer functions for different game objects.
-/// **********************************************************************
-
-const MAX_ROCK_VEL: f32 = 50.0;
-
-/// Create the given number of rocks.
-/// Makes sure that none of them are within the
-/// given exclusion zone (nominally the player)
-/// Note that this *could* create rocks outside the
-/// bounds of the playing field, so it should be
-/// called before `wrap_actor_position()` happens.
-fn create_rocks(num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Rock> {
-    assert!(max_radius > min_radius);
-    let new_rock = |_| {
-        let mut rock = create_rock();
-        let r_angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
-        let r_distance = rand::random::<f32>() * (max_radius - min_radius) + min_radius;
-        rock.set_position(exclusion + vec_from_angle(r_angle) * r_distance);
-        rock.set_velocity(random_vec(MAX_ROCK_VEL));
-        rock
-    };
-    (0..num).map(new_rock).collect()
-}
+mod input;
+use input::*;
 
 /// *********************************************************************
 /// Now we make functions to handle physics.  We do simple Newtonian
@@ -60,28 +39,8 @@ fn create_rocks(num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -
 
 const SHOT_SPEED: f32 = 200.0;
 const SPRITE_SIZE: u32 = 32;
-
-// Acceleration in pixels per second, more or less.
-const PLAYER_THRUST: f32 = 100.0;
-// Rotation in radians per second.
-const PLAYER_TURN_RATE: f32 = 3.05;
 // Seconds between shots
 const PLAYER_SHOT_TIME: f32 = 0.5;
-
-
-fn player_handle_input<T: Actor>(actor: &mut T, input: &InputState, dt: f32) {
-    actor.add_facing(dt * PLAYER_TURN_RATE * input.xaxis);
-
-    if input.yaxis > 0.0 {
-        player_thrust(actor, dt);
-    }
-}
-
-fn player_thrust<T: Actor>(actor: &mut T, dt: f32) {
-    let direction_vector = vec_from_angle(actor.facing());
-    let thrust_vector = direction_vector * (PLAYER_THRUST);
-    actor.add_velocity(thrust_vector * (dt));
-}
 
 const MAX_PHYSICS_VEL: f32 = 250.0;
 
@@ -185,31 +144,8 @@ impl Assets {
 }
 
 /// **********************************************************************
-/// The `InputState` is exactly what it sounds like, it just keeps track of
-/// the user's input state so that we turn keyboard events into something
-/// state-based and device-independent.
-/// **********************************************************************
-#[derive(Debug)]
-struct InputState {
-    xaxis: f32,
-    yaxis: f32,
-    fire: bool,
-}
-
-impl Default for InputState {
-    fn default() -> Self {
-        InputState {
-            xaxis: 0.0,
-            yaxis: 0.0,
-            fire: false,
-        }
-    }
-}
-
-/// **********************************************************************
-/// Now we're getting into the actual game loop.  The `MainState` is our
-/// game's "global" state, it keeps track of everything we need for
-/// actually running the game.
+/// The `MainState` is our game's "global" state, it keeps track of
+/// everything we need for actually running the game.
 ///
 /// Our game objects are simply a vector for each actor type, and we
 /// probably mingle gameplay-state (like score) and hardware-state
@@ -368,7 +304,7 @@ impl EventHandler for MainState {
             let seconds = 1.0 / (DESIRED_FPS as f32);
 
             // Update the player state based on the user input.
-            player_handle_input(&mut self.player, &self.input, seconds);
+            self.player.handle_input(&self.input, seconds);
             self.player_shot_timeout -= seconds;
             if self.input.fire && self.player_shot_timeout < 0.0 {
                 self.fire_player_shot();

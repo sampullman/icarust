@@ -1,6 +1,12 @@
 
 use ggez::graphics::{Vector2, Point2};
 use ggez::nalgebra as na;
+use rand;
+use std;
+use util::*;
+use input::InputState;
+
+pub mod player;
 
 #[derive(Debug, Copy, Clone)]
 pub enum ActorType {
@@ -21,11 +27,6 @@ pub struct BaseActor {
     // For shots, it is the time left to live,
     // for players and rocks, it is the actual hit points.
     pub life: f32,
-}
-
-#[derive(Debug, Actor)]
-pub struct Player {
-	pub actor: BaseActor,
 }
 
 #[derive(Debug, Actor)]
@@ -89,6 +90,10 @@ pub trait Actor: Sized {
     }
 }
 
+pub trait Inputable: Actor {
+    fn handle_input(&mut self, input: &InputState, dt: f32);
+}
+
 pub trait Collidable: Actor {
     fn check_collision<T: Actor+Collidable>(&mut self, other: &mut T) -> bool {
 
@@ -107,38 +112,17 @@ pub trait Collidable: Actor {
     }
 }
 
-impl Collidable for Player {
-}
+impl Collidable for Rock {}
+impl Collidable for Shot {}
 
-impl Collidable for Rock {
-}
-
-impl Collidable for Shot {
-}
-
-const PLAYER_LIFE: f32 = 1.0;
 const SHOT_LIFE: f32 = 2.0;
 const ROCK_LIFE: f32 = 1.0;
+const MAX_ROCK_VEL: f32 = 50.0;
 
-const PLAYER_BBOX: f32 = 12.0;
 const ROCK_BBOX: f32 = 12.0;
 const SHOT_BBOX: f32 = 6.0;
 
 const SHOT_RVEL: f32 = 0.1;
-
-pub fn create_player() -> Player {
-    Player {
-		actor: BaseActor {
-        	tag: ActorType::Player,
-        	pos: Point2::origin(),
-        	facing: 0.,
-        	velocity: na::zero(),
-        	bbox_size: PLAYER_BBOX,
-        	life: PLAYER_LIFE,
-            rvel: 0.,
-		},
-    }
-}
 
 pub fn create_rock() -> Rock {
     Rock {
@@ -152,6 +136,25 @@ pub fn create_rock() -> Rock {
             rvel: 0.,
 		},
     }
+}
+
+/// Create the given number of rocks.
+/// Makes sure that none of them are within the
+/// given exclusion zone (nominally the player)
+/// Note that this *could* create rocks outside the
+/// bounds of the playing field, so it should be
+/// called before `wrap_actor_position()` happens.
+pub fn create_rocks(num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Rock> {
+    assert!(max_radius > min_radius);
+    let new_rock = |_| {
+        let mut rock = create_rock();
+        let r_angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
+        let r_distance = rand::random::<f32>() * (max_radius - min_radius) + min_radius;
+        rock.set_position(exclusion + vec_from_angle(r_angle) * r_distance);
+        rock.set_velocity(random_vec(MAX_ROCK_VEL));
+        rock
+    };
+    (0..num).map(new_rock).collect()
 }
 
 pub fn create_shot() -> Shot {
