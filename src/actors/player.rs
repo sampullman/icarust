@@ -15,11 +15,11 @@ pub struct Player {
 
 impl Collidable for Player {}
 
-pub fn create_player() -> Player {
+pub fn create_player(screen_width: f32, screen_height: f32) -> Player {
     Player {
 		actor: BaseActor {
         	tag: ActorType::Player,
-        	pos: Point2::origin(),
+        	pos: Point2::new(screen_width / 2.0, screen_height / 2.0),
         	facing: 0.,
         	velocity: na::zero(),
         	bbox_size: PLAYER_BBOX,

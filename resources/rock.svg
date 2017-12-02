@@ -16,7 +16,7 @@
    id="svg8"
    inkscape:version="0.92.2 (unknown)"
    sodipodi:docname="rock.svg"
-   inkscape:export-filename="/home/sam/bitmap.png"
+   inkscape:export-filename="/home/sam/git/rust/icarust/resources/rock.png"
    inkscape:export-xdpi="96"
    inkscape:export-ydpi="96">
   <defs
@@ -64,7 +64,9 @@
        width="8.4666662"
        height="8.4666662"
        x="-8.4666662"
-       y="288.53333" />
+       y="288.53333"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
     <path
        style="fill:none;stroke:#ffffff;stroke-width:0.26458332px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;fill-opacity:1"
        d="m 2.0380723,295.395 -1.66867169,-2.30556 0.82796689,-2.22915 2.3692589,-1.93616 3.1590123,0.22928 1.4266505,3.82138 -1.6941477,3.56663 -3.0443704,-0.0127 z"

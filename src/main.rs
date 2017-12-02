@@ -15,7 +15,7 @@ use ggez::timer;
 use std::env;
 use std::path;
 
-use ggez::graphics::{Vector2, Point2};
+use ggez::graphics::{Drawable, Vector2, Point2};
 
 mod actors;
 use actors::*;
@@ -62,37 +62,22 @@ fn update_actor_position<T: Actor>(actor: &mut T, dt: f32) {
 /// will re-enter on the right side and so on.
 fn wrap_actor_position<T: Actor>(actor: &mut T, sx: f32, sy: f32) {
     // Wrap screen
-    let screen_x_bounds = sx / 2.0;
-    let screen_y_bounds = sy / 2.0;
     let sprite_half_size = (SPRITE_SIZE / 2) as f32;
     let actor_center = actor.position() - Vector2::new(-sprite_half_size, sprite_half_size);
-    if actor_center.x > screen_x_bounds {
+    if actor_center.x > sx {
         actor.add_x(-sx);
-    } else if actor_center.x < -screen_x_bounds {
+    } else if actor_center.x < 0. {
         actor.add_x(sx);
     };
-    if actor_center.y > screen_y_bounds {
+    if actor_center.y > sy {
         actor.add_y(-sy);
-    } else if actor_center.y < -screen_y_bounds {
+    } else if actor_center.y < 0. {
         actor.add_y(sy);
     }
 }
 
 fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 	actor.add_life(-dt)
-}
-
-
-/// Translates the world coordinate system, which
-/// has Y pointing up and the origin at the center,
-/// to the screen coordinate system, which has Y
-/// pointing downward and the origin at the top-left,
-fn world_to_screen_coords(screen_width: u32, screen_height: u32, point: Point2) -> Point2 {
-    let width = screen_width as f32;
-    let height = screen_height as f32;
-    let x = point.x + width / 2.0;
-    let y = height - (point.y + height / 2.0);
-    Point2::new(x, y)
 }
 
 /// **********************************************************************
@@ -167,6 +152,7 @@ struct MainState {
     gui_dirty: bool,
     score_display: graphics::Text,
     level_display: graphics::Text,
+    ubuntu_hack: bool,
 }
 
 
@@ -183,7 +169,10 @@ impl MainState {
         let score_disp = graphics::Text::new(ctx, "score", &assets.font)?;
         let level_disp = graphics::Text::new(ctx, "level", &assets.font)?;
 
-        let player = create_player();
+        let screen_width = ctx.conf.window_mode.width;
+        let screen_height = ctx.conf.window_mode.height;
+
+        let player = create_player(screen_width as f32, screen_height as f32);
         let rocks = create_rocks(5, player.position(), 100.0, 250.0);
 
         let s = MainState {
@@ -193,13 +182,14 @@ impl MainState {
             level: 0,
             score: 0,
             assets: assets,
-            screen_width: ctx.conf.window_mode.width,
-            screen_height: ctx.conf.window_mode.height,
+            screen_width: screen_width,
+            screen_height: screen_height,
             input: InputState::default(),
             player_shot_timeout: 0.0,
             gui_dirty: true,
             score_display: score_disp,
             level_display: level_disp,
+            ubuntu_hack: true,
         };
 
         Ok(s)
@@ -274,22 +264,38 @@ fn print_instructions() {
     println!();
 }
 
+/// Translates the world coordinate system, which
+/// has Y pointing up and the origin at the center,
+/// to the screen coordinate system, which has Y
+/// pointing downward and the origin at the top-left,
+fn world_to_screen_coords(screen_width: u32, screen_height: u32, point: Point2, ubuntu: bool) -> Point2 {
+    let width = screen_width as f32;
+    let height = screen_height as f32;
 
-fn draw_actor<T: Actor>(assets: &mut Assets,
-              ctx: &mut Context,
-              actor: &T,
-              world_coords: (u32, u32))
+    let (x, y) = if ubuntu {
+        (-1. * (width - point.x), height - point.y)
+    } else {
+        (point.x, height - point.y)
+    };
+    Point2::new(x, y)
+}
+
+fn draw_image(ctx: &mut Context,
+              drawable: &Drawable,
+              position: Point2,
+              facing: f32,
+              world_coords: (u32, u32),
+              ubuntu: bool)
               -> GameResult<()> {
     let (screen_w, screen_h) = world_coords;
-    let pos = world_to_screen_coords(screen_w, screen_h, actor.position());
+    let pos = world_to_screen_coords(screen_w, screen_h, position, ubuntu);
     // let pos = Vector2::new(1.0, 1.0);
-    let px = pos.x as f32;
-    let py = pos.y as f32;
-    let dest_point = graphics::Point2::new(px, py);
-    let image = assets.actor_image(actor);
-    graphics::draw(ctx, image, dest_point, actor.facing() as f32)
 
+    let dest_point = graphics::Point2::new(pos.x as f32, pos.y as f32);
+    graphics::draw(ctx, drawable, dest_point, facing)
 }
+
+
 
 /// **********************************************************************
 /// Now we implement the `EventHandler` trait from `ggez::event`, which provides
@@ -351,8 +357,8 @@ impl EventHandler for MainState {
             // I want to have a nice death screen eventually,
             // but for now we just quit.
             if self.player.life() <= 0.0 {
-                println!("Game over!");
-                let _ = ctx.quit();
+                //println!("Game over!");
+                //let _ = ctx.quit();
             }
         }
 
@@ -365,31 +371,29 @@ impl EventHandler for MainState {
         graphics::clear(ctx);
 
         // Loop over all objects drawing them...
+        let assets = &mut self.assets;
+        let coords = (self.screen_width, self.screen_height);
         {
-            let assets = &mut self.assets;
-            let coords = (self.screen_width, self.screen_height);
 
             let p = &self.player;
-            draw_actor(assets, ctx, p, coords)?;
+            draw_image(ctx, assets.actor_image(p), p.position(), p.facing(), coords, self.ubuntu_hack)?;
 
             for s in &self.shots {
-                draw_actor(assets, ctx, s, coords)?;
+                draw_image(ctx, assets.actor_image(s), s.position(), s.facing(), coords, self.ubuntu_hack)?;
             }
 
             for r in &self.rocks {
-                draw_actor(assets, ctx, r, coords)?;
+                draw_image(ctx, assets.actor_image(r), r.position(), r.facing(), coords, self.ubuntu_hack)?;
             }
         }
 
 
         // And draw the GUI elements in the right places.
-        let level_dest = graphics::Point2::new((self.level_display.width() / 2) as f32 + 10.0,
-                                               (self.level_display.height() / 2) as f32 + 10.0);
-        let score_dest = graphics::Point2::new((self.score_display.width() / 2) as f32 + 200.0,
-                                               (self.score_display.height() / 2) as f32 + 10.0);
-        graphics::draw(ctx, &self.level_display, level_dest, 0.0)?;
-        graphics::draw(ctx, &self.score_display, score_dest, 0.0)?;
+        let level_dest = graphics::Point2::new((self.level_display.width() / 2) as f32 + 10.0, 10.0);
+        let score_dest = graphics::Point2::new((self.level_display.width() + self.score_display.width() / 2) as f32 + 20.0, 10.0);
 
+        draw_image(ctx, &self.level_display, level_dest, 0.0, coords, self.ubuntu_hack)?;
+        draw_image(ctx, &self.score_display, score_dest, 0.0, coords, self.ubuntu_hack)?;
         // Then we flip the screen...
         graphics::present(ctx);
 
@@ -410,20 +414,29 @@ impl EventHandler for MainState {
                       keycode: Keycode,
                       _keymod: Mod,
                       _repeat: bool) {
+
         match keycode {
             Keycode::Up => {
                 self.input.yaxis = 1.0;
             }
             Keycode::Left => {
                 self.input.xaxis = -1.0;
+                if self.ubuntu_hack {
+                    self.input.xaxis *= -1.;
+                }
             }
             Keycode::Right => {
                 self.input.xaxis = 1.0;
+                if self.ubuntu_hack {
+                    self.input.xaxis *= -1.;
+                }
             }
             Keycode::Space => {
                 self.input.fire = true;
             }
-            Keycode::Escape => ctx.quit().unwrap(),
+            Keycode::Escape => {
+                ctx.quit().unwrap()
+            },
             _ => (), // Do nothing
         }
     }
