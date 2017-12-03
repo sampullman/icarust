@@ -1,5 +1,6 @@
 
 use actors::*;
+use assets::{AssetManager, Sprite};
 
 const PLAYER_LIFE: f32 = 1.0;
 const PLAYER_BBOX: f32 = 12.0;
@@ -10,15 +11,16 @@ const PLAYER_TURN_RATE: f32 = 3.05;
 
 #[derive(Debug, Actor)]
 pub struct Player {
-	pub actor: BaseActor,
+	pub actor: BaseActor<Sprite>,
 }
 
 impl Collidable for Player {}
 
-pub fn create_player(screen_width: f32, screen_height: f32) -> Player {
+pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen_width: f32, screen_height: f32) -> Player {
     Player {
 		actor: BaseActor {
         	tag: ActorType::Player,
+            asset: asset_manager.make_sprite(ctx, "/player.png"),
         	pos: Point2::new(screen_width / 2.0, screen_height / 2.0),
         	facing: 0.,
         	velocity: na::zero(),

@@ -15,7 +15,7 @@ use ggez::timer;
 use std::env;
 use std::path;
 
-use ggez::graphics::{Drawable, DrawParam, Vector2, Point2};
+use ggez::graphics::{Vector2, Point2};
 
 mod actors;
 use actors::*;
@@ -26,6 +26,9 @@ use util::*;
 
 mod input;
 use input::*;
+
+pub mod assets;
+use assets::AssetManager;
 
 /// *********************************************************************
 /// Now we make functions to handle physics.  We do simple Newtonian
@@ -81,9 +84,6 @@ fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 }
 
 struct Assets {
-    player_image: graphics::Image,
-    shot_image: graphics::Image,
-    rock_image: graphics::Image,
     font: graphics::Font,
     shot_sound: audio::Source,
     hit_sound: audio::Source,
@@ -91,9 +91,6 @@ struct Assets {
 
 impl Assets {
     fn new(ctx: &mut Context) -> GameResult<Assets> {
-        let player_image = graphics::Image::new(ctx, "/player.png")?;
-        let shot_image = graphics::Image::new(ctx, "/shot.png")?;
-        let rock_image = graphics::Image::new(ctx, "/rock.png")?;
         // let font_path = path::Path::new("/consolefont.png");
         // let font_chars =
         //"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!,.?;'\"";
@@ -103,21 +100,10 @@ impl Assets {
         let shot_sound = audio::Source::new(ctx, "/pew.ogg")?;
         let hit_sound = audio::Source::new(ctx, "/boom.ogg")?;
         Ok(Assets {
-               player_image: player_image,
-               shot_image: shot_image,
-               rock_image: rock_image,
                font: font,
                shot_sound: shot_sound,
                hit_sound: hit_sound,
            })
-    }
-
-    fn actor_image<T: Actor>(&mut self, actor: &T) -> &mut graphics::Image {
-        match actor.tag() {
-            ActorType::Player => &mut self.player_image,
-            ActorType::Rock => &mut self.rock_image,
-            ActorType::Shot => &mut self.shot_image,
-        }
     }
 }
 
@@ -132,6 +118,7 @@ impl Assets {
 /// **********************************************************************
 
 struct MainState {
+    asset_manager: AssetManager,
     player: Player,
     shots: Vec<Shot>,
     rocks: Vec<Rock>,
@@ -158,6 +145,7 @@ impl MainState {
 
         print_instructions();
 
+        let mut am = AssetManager::new();
         let assets = Assets::new(ctx)?;
         let debug_disp = graphics::Text::new(ctx, "debug", &assets.font)?;
         let score_disp = graphics::Text::new(ctx, "score", &assets.font)?;
@@ -166,10 +154,11 @@ impl MainState {
         let screen_width = ctx.conf.window_mode.width;
         let screen_height = ctx.conf.window_mode.height;
 
-        let player = create_player(screen_width as f32, screen_height as f32);
-        let rocks = create_rocks(5, player.position(), 100.0, 250.0);
+        let player = create_player(ctx, &mut am, screen_width as f32, screen_height as f32);
+        let rocks = create_rocks(ctx, &mut am, 5, player.position(), 100.0, 250.0);
 
         let s = MainState {
+            asset_manager: am,
             player: player,
             shots: Vec::new(),
             rocks: rocks,
@@ -189,11 +178,11 @@ impl MainState {
         Ok(s)
     }
 
-    fn fire_player_shot(&mut self) {
+    fn fire_player_shot(&mut self, ctx: &mut Context) {
         self.player_shot_timeout = PLAYER_SHOT_TIME;
 
         let player = &self.player;
-        let mut shot = create_shot();
+        let mut shot = create_shot(ctx, &mut self.asset_manager);
         shot.set_position(player.position());
         shot.set_facing(player.facing());
         let direction = vec_from_angle(shot.facing());
@@ -222,11 +211,11 @@ impl MainState {
         }
     }
 
-    fn check_for_level_respawn(&mut self) {
+    fn check_for_level_respawn(&mut self, ctx: &mut Context) {
         if self.rocks.is_empty() {
             self.level += 1;
             self.gui_dirty = true;
-            let r = create_rocks(self.level + 5, self.player.position(), 100.0, 250.0);
+            let r = create_rocks(ctx, &mut self.asset_manager, self.level + 5, self.player.position(), 100.0, 250.0);
             self.rocks.extend(r);
         }
     }
@@ -245,33 +234,6 @@ impl MainState {
     }
 }
 
-/// Translates the world coordinate system, which
-/// has Y pointing up and the origin at the center,
-/// to the screen coordinate system, which has Y
-/// pointing downward and the origin at the top-left,
-fn world_to_screen_coords(_screen_width: u32, screen_height: u32, point: Point2) -> Point2 {
-    let height = screen_height as f32;
-
-    Point2::new(point.x, height - point.y)
-}
-
-fn draw_image(ctx: &mut Context,
-              drawable: &Drawable,
-              position: Point2,
-              facing: f32,
-              world_coords: (u32, u32))
-              -> GameResult<()> {
-    let (screen_w, screen_h) = world_coords;
-    let pos = world_to_screen_coords(screen_w, screen_h, position);
-
-    //graphics::draw(ctx, drawable, dest_point, facing)
-    drawable.draw_ex(ctx, DrawParam { 
-                            dest: pos,
-                            rotation: facing,
-                            ..Default::default()
-    })
-}
-
 impl EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult<()> {
         const DESIRED_FPS: u32 = 60;
@@ -283,7 +245,7 @@ impl EventHandler for MainState {
             self.player.handle_input(&self.input, seconds);
             self.player_shot_timeout -= seconds;
             if self.input.fire && self.player_shot_timeout < 0.0 {
-                self.fire_player_shot();
+                self.fire_player_shot(ctx);
             }
 
             // Update the physics for all actors.
@@ -314,7 +276,7 @@ impl EventHandler for MainState {
 
             self.clear_dead_stuff();
 
-            self.check_for_level_respawn();
+            self.check_for_level_respawn(ctx);
 
             // Using a gui_dirty flag here is a little
             // messy but fine here.
@@ -344,19 +306,18 @@ impl EventHandler for MainState {
         graphics::clear(ctx);
 
         // Loop over all objects drawing them...
-        let assets = &mut self.assets;
         let coords = (self.screen_width, self.screen_height);
         {
 
             let p = &self.player;
-            draw_image(ctx, assets.actor_image(p), p.position(), p.facing(), coords)?;
+            p.draw(ctx, coords);
 
             for s in &self.shots {
-                draw_image(ctx, assets.actor_image(s), s.position(), s.facing(), coords)?;
+                s.draw(ctx, coords);
             }
 
             for r in &self.rocks {
-                draw_image(ctx, assets.actor_image(r), r.position(), r.facing(), coords)?;
+                r.draw(ctx, coords);
             }
         }
 

@@ -1,4 +1,5 @@
 
+use ggez::Context;
 use ggez::graphics::{Vector2, Point2};
 use ggez::nalgebra as na;
 use rand;
@@ -8,6 +9,8 @@ use input::InputState;
 
 pub mod player;
 
+use assets::{Sprite, Asset, AssetManager};
+
 #[derive(Debug, Copy, Clone)]
 pub enum ActorType {
     Player,
@@ -16,8 +19,9 @@ pub enum ActorType {
 }
 
 #[derive(Debug)]
-pub struct BaseActor {
+pub struct BaseActor<T: Asset> {
     pub tag: ActorType,
+    pub asset: T,
     pub pos: Point2,
     pub facing: f32,
     pub velocity: Vector2,
@@ -31,15 +35,16 @@ pub struct BaseActor {
 
 #[derive(Debug, Actor)]
 pub struct Shot {
-	pub actor: BaseActor,
+	pub actor: BaseActor<Sprite>,
 }
 
 #[derive(Debug, Actor)]
 pub struct Rock {
-	pub actor: BaseActor,
+	pub actor: BaseActor<Sprite>,
 }
 
 pub trait Actor: Sized {
+    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32));
 
     fn tag(&self) -> ActorType;
 
@@ -124,10 +129,11 @@ const SHOT_BBOX: f32 = 6.0;
 
 const SHOT_RVEL: f32 = 0.1;
 
-pub fn create_rock() -> Rock {
+pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock {
     Rock {
 		actor: BaseActor {
         	tag: ActorType::Rock,
+            asset: asset_manager.make_sprite(ctx, "/rock.png"),            
         	pos: Point2::origin(),
         	facing: 0.,
         	velocity: na::zero(),
@@ -144,10 +150,10 @@ pub fn create_rock() -> Rock {
 /// Note that this *could* create rocks outside the
 /// bounds of the playing field, so it should be
 /// called before `wrap_actor_position()` happens.
-pub fn create_rocks(num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Rock> {
+pub fn create_rocks(ctx: &mut Context, asset_manager: &mut AssetManager, num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Rock> {
     assert!(max_radius > min_radius);
     let new_rock = |_| {
-        let mut rock = create_rock();
+        let mut rock = create_rock(ctx, asset_manager);
         let r_angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
         let r_distance = rand::random::<f32>() * (max_radius - min_radius) + min_radius;
         rock.set_position(exclusion + vec_from_angle(r_angle) * r_distance);
@@ -157,10 +163,11 @@ pub fn create_rocks(num: i32, exclusion: Point2, min_radius: f32, max_radius: f3
     (0..num).map(new_rock).collect()
 }
 
-pub fn create_shot() -> Shot {
+pub fn create_shot(ctx: &mut Context, asset_manager: &mut AssetManager) -> Shot {
     Shot {
 		actor: BaseActor {
         	tag: ActorType::Shot,
+            asset: asset_manager.make_sprite(ctx, "/shot.png"),
         	pos: Point2::origin(),
         	facing: 0.,
         	velocity: na::zero(),
