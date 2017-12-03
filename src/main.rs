@@ -15,7 +15,7 @@ use ggez::timer;
 use std::env;
 use std::path;
 
-use ggez::graphics::{Drawable, Vector2, Point2};
+use ggez::graphics::{Drawable, DrawParam, Vector2, Point2};
 
 mod actors;
 use actors::*;
@@ -150,9 +150,9 @@ struct MainState {
     input: InputState,
     player_shot_timeout: f32,
     gui_dirty: bool,
+    debug_display: graphics::Text,
     score_display: graphics::Text,
     level_display: graphics::Text,
-    ubuntu_hack: bool,
 }
 
 
@@ -166,6 +166,7 @@ impl MainState {
         print_instructions();
 
         let assets = Assets::new(ctx)?;
+        let debug_disp = graphics::Text::new(ctx, "debug", &assets.font)?;
         let score_disp = graphics::Text::new(ctx, "score", &assets.font)?;
         let level_disp = graphics::Text::new(ctx, "level", &assets.font)?;
 
@@ -187,9 +188,9 @@ impl MainState {
             input: InputState::default(),
             player_shot_timeout: 0.0,
             gui_dirty: true,
+            debug_display: debug_disp,
             score_display: score_disp,
             level_display: level_disp,
-            ubuntu_hack: true,
         };
 
         Ok(s)
@@ -242,9 +243,12 @@ impl MainState {
     fn update_ui(&mut self, ctx: &mut Context) {
         let score_str = format!("Score: {}", self.score);
         let level_str = format!("Level: {}", self.level);
+        let debug_str = format!("{:.1}, {:.1}", self.player.x(), self.player.y());
+        let debug_text = graphics::Text::new(ctx, &debug_str, &self.assets.font).unwrap();
         let score_text = graphics::Text::new(ctx, &score_str, &self.assets.font).unwrap();
         let level_text = graphics::Text::new(ctx, &level_str, &self.assets.font).unwrap();
 
+        self.debug_display = debug_text;
         self.score_display = score_text;
         self.level_display = level_text;
     }
@@ -268,31 +272,31 @@ fn print_instructions() {
 /// has Y pointing up and the origin at the center,
 /// to the screen coordinate system, which has Y
 /// pointing downward and the origin at the top-left,
-fn world_to_screen_coords(screen_width: u32, screen_height: u32, point: Point2, ubuntu: bool) -> Point2 {
+fn world_to_screen_coords(screen_width: u32, screen_height: u32, point: Point2) -> Point2 {
     let width = screen_width as f32;
     let height = screen_height as f32;
 
-    let (x, y) = if ubuntu {
-        (-1. * (width - point.x), height - point.y)
-    } else {
-        (point.x, height - point.y)
-    };
-    Point2::new(x, y)
+    Point2::new(point.x, height - point.y)
 }
 
 fn draw_image(ctx: &mut Context,
               drawable: &Drawable,
               position: Point2,
               facing: f32,
-              world_coords: (u32, u32),
-              ubuntu: bool)
+              world_coords: (u32, u32))
               -> GameResult<()> {
     let (screen_w, screen_h) = world_coords;
-    let pos = world_to_screen_coords(screen_w, screen_h, position, ubuntu);
+    let pos = world_to_screen_coords(screen_w, screen_h, position);
     // let pos = Vector2::new(1.0, 1.0);
 
-    let dest_point = graphics::Point2::new(pos.x as f32, pos.y as f32);
-    graphics::draw(ctx, drawable, dest_point, facing)
+    let dest = graphics::Point2::new(pos.x as f32, pos.y as f32);
+
+    //graphics::draw(ctx, drawable, dest_point, facing)
+    drawable.draw_ex(ctx, DrawParam { 
+                            dest: dest,
+                            rotation: facing,
+                            ..Default::default()
+    })
 }
 
 
@@ -376,24 +380,27 @@ impl EventHandler for MainState {
         {
 
             let p = &self.player;
-            draw_image(ctx, assets.actor_image(p), p.position(), p.facing(), coords, self.ubuntu_hack)?;
+            draw_image(ctx, assets.actor_image(p), p.position(), p.facing(), coords)?;
 
             for s in &self.shots {
-                draw_image(ctx, assets.actor_image(s), s.position(), s.facing(), coords, self.ubuntu_hack)?;
+                draw_image(ctx, assets.actor_image(s), s.position(), s.facing(), coords)?;
             }
 
             for r in &self.rocks {
-                draw_image(ctx, assets.actor_image(r), r.position(), r.facing(), coords, self.ubuntu_hack)?;
+                draw_image(ctx, assets.actor_image(r), r.position(), r.facing(), coords)?;
             }
         }
 
 
         // And draw the GUI elements in the right places.
-        let level_dest = graphics::Point2::new((self.level_display.width() / 2) as f32 + 10.0, 10.0);
-        let score_dest = graphics::Point2::new((self.level_display.width() + self.score_display.width() / 2) as f32 + 20.0, 10.0);
+        //let debug_disp = Point2::new((self.screen_width - ((self.debug_display.width() + 20) / 2)) as f32,
+        //                             (self.screen_height - (self.debug_display.height() + 5)) as f32);
+        let level_dest = Point2::new((self.level_display.width() / 2) as f32 + 10.0, 10.0);
+        let score_dest = Point2::new((self.level_display.width() + self.score_display.width() / 2) as f32 + 20.0, 10.0);
 
-        draw_image(ctx, &self.level_display, level_dest, 0.0, coords, self.ubuntu_hack)?;
-        draw_image(ctx, &self.score_display, score_dest, 0.0, coords, self.ubuntu_hack)?;
+        //draw_image(ctx, &self.debug_display, debug_disp, 0.0, coords)?;
+        draw_image(ctx, &self.level_display, level_dest, 0.0, coords)?;
+        draw_image(ctx, &self.score_display, score_dest, 0.0, coords)?;
         // Then we flip the screen...
         graphics::present(ctx);
 
@@ -421,15 +428,9 @@ impl EventHandler for MainState {
             }
             Keycode::Left => {
                 self.input.xaxis = -1.0;
-                if self.ubuntu_hack {
-                    self.input.xaxis *= -1.;
-                }
             }
             Keycode::Right => {
                 self.input.xaxis = 1.0;
-                if self.ubuntu_hack {
-                    self.input.xaxis *= -1.;
-                }
             }
             Keycode::Space => {
                 self.input.fire = true;
