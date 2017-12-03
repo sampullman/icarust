@@ -19,7 +19,6 @@ impl Collidable for Player {}
 pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen_width: f32, screen_height: f32) -> Player {
     Player {
 		actor: BaseActor {
-        	tag: ActorType::Player,
             asset: asset_manager.make_sprite(ctx, "/player.png"),
         	pos: Point2::new(screen_width / 2.0, screen_height / 2.0),
         	facing: 0.,

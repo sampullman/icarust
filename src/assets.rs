@@ -36,7 +36,6 @@ pub trait Asset {
     fn draw(&self, ctx: &mut Context, world_coords: (u32, u32), position: Point2, facing: f32);
 }
 
-
 #[derive(Debug)]
 pub struct Sprite {
     image: Rc<Image>,
@@ -48,3 +47,4 @@ impl Asset for Sprite {
         util::draw_image(ctx, &*self.image, position, facing, world_coords);
     }
 }
+

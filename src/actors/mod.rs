@@ -11,16 +11,8 @@ pub mod player;
 
 use assets::{Sprite, Asset, AssetManager};
 
-#[derive(Debug, Copy, Clone)]
-pub enum ActorType {
-    Player,
-    Rock,
-    Shot,
-}
-
 #[derive(Debug)]
 pub struct BaseActor<T: Asset> {
-    pub tag: ActorType,
     pub asset: T,
     pub pos: Point2,
     pub facing: f32,
@@ -45,8 +37,6 @@ pub struct Rock {
 
 pub trait Actor: Sized {
     fn draw(&self, ctx: &mut Context, world_coords: (u32, u32));
-
-    fn tag(&self) -> ActorType;
 
     fn position(&self) -> Point2;
 	fn set_position(&mut self, pos: Point2);
@@ -132,7 +122,6 @@ const SHOT_RVEL: f32 = 0.1;
 pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock {
     Rock {
 		actor: BaseActor {
-        	tag: ActorType::Rock,
             asset: asset_manager.make_sprite(ctx, "/rock.png"),            
         	pos: Point2::origin(),
         	facing: 0.,
@@ -166,7 +155,6 @@ pub fn create_rocks(ctx: &mut Context, asset_manager: &mut AssetManager, num: i3
 pub fn create_shot(ctx: &mut Context, asset_manager: &mut AssetManager) -> Shot {
     Shot {
 		actor: BaseActor {
-        	tag: ActorType::Shot,
             asset: asset_manager.make_sprite(ctx, "/shot.png"),
         	pos: Point2::origin(),
         	facing: 0.,
