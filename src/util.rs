@@ -18,3 +18,12 @@ pub fn random_vec(max_magnitude: f32) -> Vector2 {
     let mag = rand::random::<f32>() * max_magnitude;
     vec_from_angle(angle) * (mag)
 }
+
+pub fn print_instructions() {
+    println!();
+    println!("Welcome to ASTROBLASTO!");
+    println!();
+    println!("How to play:");
+    println!("L/R arrow keys rotate your ship, up thrusts, space bar fires");
+    println!();
+}

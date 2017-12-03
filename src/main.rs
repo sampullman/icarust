@@ -80,13 +80,6 @@ fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 	actor.add_life(-dt)
 }
 
-/// **********************************************************************
-/// So that was the real meat of our game.  Now we just need a structure
-/// to contain the images, sounds, etc. that we need to hang on to; this
-/// is our "asset management system".  All the file names and such are
-/// just hard-coded.
-/// **********************************************************************
-
 struct Assets {
     player_image: graphics::Image,
     shot_image: graphics::Image,
@@ -210,8 +203,6 @@ impl MainState {
         let _ = self.assets.shot_sound.play();
     }
 
-
-
     fn clear_dead_stuff(&mut self) {
         self.shots.retain(|s| s.life() > 0.0);
         self.rocks.retain(|r| r.life() > 0.0);
@@ -254,26 +245,11 @@ impl MainState {
     }
 }
 
-
-/// **********************************************************************
-/// A couple of utility functions.
-/// **********************************************************************
-
-fn print_instructions() {
-    println!();
-    println!("Welcome to ASTROBLASTO!");
-    println!();
-    println!("How to play:");
-    println!("L/R arrow keys rotate your ship, up thrusts, space bar fires");
-    println!();
-}
-
 /// Translates the world coordinate system, which
 /// has Y pointing up and the origin at the center,
 /// to the screen coordinate system, which has Y
 /// pointing downward and the origin at the top-left,
-fn world_to_screen_coords(screen_width: u32, screen_height: u32, point: Point2) -> Point2 {
-    let width = screen_width as f32;
+fn world_to_screen_coords(_screen_width: u32, screen_height: u32, point: Point2) -> Point2 {
     let height = screen_height as f32;
 
     Point2::new(point.x, height - point.y)
@@ -287,25 +263,15 @@ fn draw_image(ctx: &mut Context,
               -> GameResult<()> {
     let (screen_w, screen_h) = world_coords;
     let pos = world_to_screen_coords(screen_w, screen_h, position);
-    // let pos = Vector2::new(1.0, 1.0);
-
-    let dest = graphics::Point2::new(pos.x as f32, pos.y as f32);
 
     //graphics::draw(ctx, drawable, dest_point, facing)
     drawable.draw_ex(ctx, DrawParam { 
-                            dest: dest,
+                            dest: pos,
                             rotation: facing,
                             ..Default::default()
     })
 }
 
-
-
-/// **********************************************************************
-/// Now we implement the `EventHandler` trait from `ggez::event`, which provides
-/// ggez with callbacks for updating and drawing our game, as well as
-/// handling input events.
-/// **********************************************************************
 impl EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult<()> {
         const DESIRED_FPS: u32 = 60;
@@ -363,6 +329,9 @@ impl EventHandler for MainState {
             if self.player.life() <= 0.0 {
                 //println!("Game over!");
                 //let _ = ctx.quit();
+            } else if self.input.quit {
+                ctx.quit().unwrap();
+                break
             }
         }
 
@@ -414,48 +383,15 @@ impl EventHandler for MainState {
         Ok(())
     }
 
-    // Handle key events.  These just map keyboard events
-    // and alter our input state appropriately.
-    fn key_down_event(&mut self,
-                      ctx: &mut Context,
-                      keycode: Keycode,
-                      _keymod: Mod,
-                      _repeat: bool) {
+    fn key_down_event(&mut self, _ctx: &mut Context, keycode: Keycode, _keymod: Mod, _repeat: bool) {
 
-        match keycode {
-            Keycode::Up => {
-                self.input.yaxis = 1.0;
-            }
-            Keycode::Left => {
-                self.input.xaxis = -1.0;
-            }
-            Keycode::Right => {
-                self.input.xaxis = 1.0;
-            }
-            Keycode::Space => {
-                self.input.fire = true;
-            }
-            Keycode::Escape => {
-                ctx.quit().unwrap()
-            },
-            _ => (), // Do nothing
-        }
+        self.input.handle_key_down(keycode, _keymod)
     }
 
 
     fn key_up_event(&mut self, _ctx: &mut Context, keycode: Keycode, _keymod: Mod, _repeat: bool) {
-        match keycode {
-            Keycode::Up => {
-                self.input.yaxis = 0.0;
-            }
-            Keycode::Left | Keycode::Right => {
-                self.input.xaxis = 0.0;
-            }
-            Keycode::Space => {
-                self.input.fire = false;
-            }
-            _ => (), // Do nothing
-        }
+
+        self.input.handle_key_up(keycode, _keymod)
     }
 }
 
