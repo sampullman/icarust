@@ -250,14 +250,13 @@ impl EventHandler for MainState {
             }
 
             // Finally we check for our end state.
-            // I want to have a nice death screen eventually,
-            // but for now we just quit.
-            if self.player.life() <= 0.0 {
-                //println!("Game over!");
-                //let _ = ctx.quit();
-            } else if self.input.quit {
+            if self.input.quit {
                 ctx.quit().unwrap();
                 break
+            } else if self.player.life() <= 0.0 {
+            
+                //println!("Game over!");
+                //let _ = ctx.quit();
             }
         }
 
