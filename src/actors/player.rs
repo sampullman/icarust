@@ -5,7 +5,8 @@ use assets::{AssetManager, SoundId, Sprite};
 const PLAYER_LIFE: f32 = 1.0;
 const PLAYER_BBOX: f32 = 12.0;
 
-const PLAYER_THRUST: f32 = 100.0;
+const PLAYER_THRUST: f32 = 380.0;
+const PLAYER_GRAVITY: f32 = 120.0;
 // Rotation in radians per second.
 const PLAYER_TURN_RATE: f32 = 3.05;
 
@@ -53,6 +54,11 @@ impl Updatable for Player {
 
     fn update(&mut self, ctx: &mut Context, asset_manager: &mut AssetManager, dt: f32) {
         self.shot_timeout -= dt;
+
+        let direction_vector = vec_from_angle(self.facing());
+        let drag_vector = direction_vector * -1.25;
+        let gravity_vector = Vector2::new(0.0, -PLAYER_GRAVITY);
+        self.add_velocity((gravity_vector + drag_vector) * dt);
     }
 }
 
