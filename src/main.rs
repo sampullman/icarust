@@ -28,7 +28,10 @@ mod input;
 use input::*;
 
 pub mod assets;
-use assets::AssetManager;
+use assets::{AssetManager};
+
+pub mod widget;
+use widget::{Widget, TextWidget};
 
 /// *********************************************************************
 /// Now we make functions to handle physics.  We do simple Newtonian
@@ -84,23 +87,16 @@ fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 }
 
 struct Assets {
-    font: graphics::Font,
     shot_sound: audio::Source,
     hit_sound: audio::Source,
 }
 
 impl Assets {
     fn new(ctx: &mut Context) -> GameResult<Assets> {
-        // let font_path = path::Path::new("/consolefont.png");
-        // let font_chars =
-        //"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!,.?;'\"";
-        // let font = graphics::Font::new_bitmap(ctx, font_path, font_chars)?;
-        let font = graphics::Font::new(ctx, "/DejaVuSerif.ttf", 18)?;
 
         let shot_sound = audio::Source::new(ctx, "/pew.ogg")?;
         let hit_sound = audio::Source::new(ctx, "/boom.ogg")?;
         Ok(Assets {
-               font: font,
                shot_sound: shot_sound,
                hit_sound: hit_sound,
            })
@@ -130,11 +126,10 @@ struct MainState {
     input: InputState,
     player_shot_timeout: f32,
     gui_dirty: bool,
-    debug_display: graphics::Text,
-    score_display: graphics::Text,
-    level_display: graphics::Text,
+    debug_text: TextWidget,
+    score_text: TextWidget,
+    level_text: TextWidget,
 }
-
 
 impl MainState {
     fn new(ctx: &mut Context) -> GameResult<MainState> {
@@ -147,15 +142,16 @@ impl MainState {
 
         let mut am = AssetManager::new();
         let assets = Assets::new(ctx)?;
-        let debug_disp = graphics::Text::new(ctx, "debug", &assets.font)?;
-        let score_disp = graphics::Text::new(ctx, "score", &assets.font)?;
-        let level_disp = graphics::Text::new(ctx, "level", &assets.font)?;
 
         let screen_width = ctx.conf.window_mode.width;
         let screen_height = ctx.conf.window_mode.height;
 
         let player = create_player(ctx, &mut am, screen_width as f32, screen_height as f32);
         let rocks = create_rocks(ctx, &mut am, 5, player.position(), 100.0, 250.0);
+
+        let debug_text = TextWidget::new(ctx, &mut am, 16)?;
+        let score_text = TextWidget::new(ctx, &mut am, 16)?;
+        let level_text = TextWidget::new(ctx, &mut am, 16)?;
 
         let s = MainState {
             asset_manager: am,
@@ -170,9 +166,9 @@ impl MainState {
             input: InputState::default(),
             player_shot_timeout: 0.0,
             gui_dirty: true,
-            debug_display: debug_disp,
-            score_display: score_disp,
-            level_display: level_disp,
+            debug_text: debug_text,
+            score_text: score_text,
+            level_text: level_text,
         };
 
         Ok(s)
@@ -221,16 +217,20 @@ impl MainState {
     }
 
     fn update_ui(&mut self, ctx: &mut Context) {
-        let score_str = format!("Score: {}", self.score);
-        let level_str = format!("Level: {}", self.level);
-        let debug_str = format!("{:.1}, {:.1}", self.player.x(), self.player.y());
-        let debug_text = graphics::Text::new(ctx, &debug_str, &self.assets.font).unwrap();
-        let score_text = graphics::Text::new(ctx, &score_str, &self.assets.font).unwrap();
-        let level_text = graphics::Text::new(ctx, &level_str, &self.assets.font).unwrap();
+        let am = &mut self.asset_manager;
 
-        self.debug_display = debug_text;
-        self.score_display = score_text;
-        self.level_display = level_text;
+        //self.debug_text.set_text(format!("{:.1}, {:.1}", self.player.x(), self.player.y()));
+        self.score_text.set_text(ctx, am, &format!("Score: {}", self.score));
+        self.level_text.set_text(ctx, am, &format!("Level: {}", self.level));
+
+        // Set TextWidget positions
+        //let debug_disp = Point2::new((self.screen_width - ((self.debug_text.width() + 20) / 2)) as f32,
+        //                             (self.screen_height - (self.debug_text.height() + 5)) as f32);
+        let level_pos = Point2::new((self.level_text.width() / 2) as f32 + 10.0, 10.0);
+        self.level_text.set_position(level_pos);
+
+        let score_pos = Point2::new((self.level_text.width() + self.score_text.width() / 2) as f32 + 20.0, 10.0);
+        self.score_text.set_position(score_pos);
     }
 }
 
@@ -301,11 +301,10 @@ impl EventHandler for MainState {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
-        // Our drawing is quite simple.
-        // Just clear the screen...
+
+        // Clear the screen
         graphics::clear(ctx);
 
-        // Loop over all objects drawing them...
         let coords = (self.screen_width, self.screen_height);
         {
 
@@ -321,17 +320,11 @@ impl EventHandler for MainState {
             }
         }
 
+        self.debug_text.draw(ctx, coords);
+        self.level_text.draw(ctx, coords);
+        self.score_text.draw(ctx, coords);
 
-        // And draw the GUI elements in the right places.
-        //let debug_disp = Point2::new((self.screen_width - ((self.debug_display.width() + 20) / 2)) as f32,
-        //                             (self.screen_height - (self.debug_display.height() + 5)) as f32);
-        let level_dest = Point2::new((self.level_display.width() / 2) as f32 + 10.0, 10.0);
-        let score_dest = Point2::new((self.level_display.width() + self.score_display.width() / 2) as f32 + 20.0, 10.0);
-
-        //draw_image(ctx, &self.debug_display, debug_disp, 0.0, coords)?;
-        draw_image(ctx, &self.level_display, level_dest, 0.0, coords)?;
-        draw_image(ctx, &self.score_display, score_dest, 0.0, coords)?;
-        // Then we flip the screen...
+        // Then we flip the screen
         graphics::present(ctx);
 
         // And yield the timeslice
