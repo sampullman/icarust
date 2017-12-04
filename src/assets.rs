@@ -1,13 +1,16 @@
 
-use ggez::{Context, GameResult, graphics};
+use ggez::{audio, Context, GameResult, graphics};
 use ggez::graphics::{Image, Font, Point2};
 use std::collections::HashMap;
 use util;
 use std::rc::Rc;
 
+pub type SoundId = usize;
+
 pub struct AssetManager {
     image_cache: HashMap<String, Rc<Image>>,
     font_cache: HashMap<String, Rc<Font>>,
+    sound_cache: Vec<Rc<audio::Source>>,
 }
 
 impl AssetManager {
@@ -15,7 +18,17 @@ impl AssetManager {
     pub fn new() -> Self {
         AssetManager {
             image_cache: HashMap::new(),
-            font_cache: HashMap::new(), }
+            font_cache: HashMap::new(),
+            sound_cache: Vec::new(), }
+    }
+
+    pub fn add_sound(&mut self, ctx: &mut Context, path: &str) -> SoundId {
+        self.sound_cache.push(Rc::new(audio::Source::new(ctx, path).unwrap()));
+        self.sound_cache.len() - 1
+    }
+
+    pub fn get_sound(&self, id: SoundId) -> Rc<audio::Source> {
+        self.sound_cache[id].clone()
     }
 
     pub fn get_image(&mut self, ctx: &mut Context, file: &str) -> Rc<Image> {

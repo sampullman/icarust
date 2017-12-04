@@ -5,7 +5,6 @@
 #[macro_use] extern crate icarust_derive;
 extern crate ggez;
 extern crate rand;
-use ggez::audio;
 use ggez::conf;
 use ggez::event::*;
 use ggez::{Context, GameResult};
@@ -28,7 +27,7 @@ mod input;
 use input::*;
 
 pub mod assets;
-use assets::{AssetManager};
+use assets::{AssetManager, SoundId};
 
 pub mod widget;
 use widget::{Widget, TextWidget};
@@ -43,10 +42,7 @@ use widget::{Widget, TextWidget};
 /// the coordinate system so that +y is up and -y is down.
 /// **********************************************************************
 
-const SHOT_SPEED: f32 = 200.0;
 const SPRITE_SIZE: u32 = 32;
-// Seconds between shots
-const PLAYER_SHOT_TIME: f32 = 0.5;
 
 const MAX_PHYSICS_VEL: f32 = 250.0;
 
@@ -86,23 +82,6 @@ fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 	actor.add_life(-dt)
 }
 
-struct Assets {
-    shot_sound: audio::Source,
-    hit_sound: audio::Source,
-}
-
-impl Assets {
-    fn new(ctx: &mut Context) -> GameResult<Assets> {
-
-        let shot_sound = audio::Source::new(ctx, "/pew.ogg")?;
-        let hit_sound = audio::Source::new(ctx, "/boom.ogg")?;
-        Ok(Assets {
-               shot_sound: shot_sound,
-               hit_sound: hit_sound,
-           })
-    }
-}
-
 /// **********************************************************************
 /// The `MainState` is our game's "global" state, it keeps track of
 /// everything we need for actually running the game.
@@ -120,11 +99,10 @@ struct MainState {
     rocks: Vec<Rock>,
     level: i32,
     score: i32,
-    assets: Assets,
+    hit_sound_id: SoundId,
     screen_width: u32,
     screen_height: u32,
     input: InputState,
-    player_shot_timeout: f32,
     gui_dirty: bool,
     debug_text: TextWidget,
     score_text: TextWidget,
@@ -141,7 +119,6 @@ impl MainState {
         print_instructions();
 
         let mut am = AssetManager::new();
-        let assets = Assets::new(ctx)?;
 
         let screen_width = ctx.conf.window_mode.width;
         let screen_height = ctx.conf.window_mode.height;
@@ -153,6 +130,8 @@ impl MainState {
         let score_text = TextWidget::new(ctx, &mut am, 16)?;
         let level_text = TextWidget::new(ctx, &mut am, 16)?;
 
+        let hit_sound_id = am.add_sound(ctx, "/boom.ogg");
+
         let s = MainState {
             asset_manager: am,
             player: player,
@@ -160,11 +139,10 @@ impl MainState {
             rocks: rocks,
             level: 0,
             score: 0,
-            assets: assets,
+            hit_sound_id: hit_sound_id,
             screen_width: screen_width,
             screen_height: screen_height,
             input: InputState::default(),
-            player_shot_timeout: 0.0,
             gui_dirty: true,
             debug_text: debug_text,
             score_text: score_text,
@@ -172,20 +150,6 @@ impl MainState {
         };
 
         Ok(s)
-    }
-
-    fn fire_player_shot(&mut self, ctx: &mut Context) {
-        self.player_shot_timeout = PLAYER_SHOT_TIME;
-
-        let player = &self.player;
-        let mut shot = create_shot(ctx, &mut self.asset_manager);
-        shot.set_position(player.position());
-        shot.set_facing(player.facing());
-        let direction = vec_from_angle(shot.facing());
-		shot.set_velocity_xy(SHOT_SPEED * direction.x, SHOT_SPEED * direction.y);
-
-        self.shots.push(shot);
-        let _ = self.assets.shot_sound.play();
     }
 
     fn clear_dead_stuff(&mut self) {
@@ -201,7 +165,7 @@ impl MainState {
                if shot.check_collision(rock) {
                     self.score += 1;
                     self.gui_dirty = true;
-                    let _ = self.assets.hit_sound.play();
+                    let _ = self.asset_manager.get_sound(self.hit_sound_id).play();
                }
             }
         }
@@ -243,9 +207,9 @@ impl EventHandler for MainState {
 
             // Update the player state based on the user input.
             self.player.handle_input(&self.input, seconds);
-            self.player_shot_timeout -= seconds;
-            if self.input.fire && self.player_shot_timeout < 0.0 {
-                self.fire_player_shot(ctx);
+            self.player.update(ctx, &mut self.asset_manager, seconds);
+            if self.input.fire && self.player.can_fire() {
+                self.shots.push(self.player.fire_shot(ctx, &mut self.asset_manager));
             }
 
             // Update the physics for all actors.

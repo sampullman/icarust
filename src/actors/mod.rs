@@ -85,6 +85,10 @@ pub trait Actor: Sized {
     }
 }
 
+pub trait Updatable {
+    fn update(&mut self, ctx: &mut Context, asset_manager: &mut AssetManager, dt: f32);
+}
+
 pub trait Inputable: Actor {
     fn handle_input(&mut self, input: &InputState, dt: f32);
 }
