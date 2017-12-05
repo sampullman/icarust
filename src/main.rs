@@ -14,7 +14,7 @@ use ggez::timer;
 use std::env;
 use std::path;
 
-use ggez::graphics::{Vector2, Point2};
+use ggez::graphics::{Point2};
 
 mod actors;
 use actors::*;
@@ -31,52 +31,6 @@ use assets::{AssetManager, SoundId};
 
 pub mod widget;
 use widget::{Widget, TextWidget};
-
-/// *********************************************************************
-/// Now we make functions to handle physics.  We do simple Newtonian
-/// physics (so we do have inertia), and cap the max speed so that we
-/// don't have to worry too much about small objects clipping through
-/// each other.
-///
-/// Our unit of world space is simply pixels, though we do transform
-/// the coordinate system so that +y is up and -y is down.
-/// **********************************************************************
-
-const SPRITE_SIZE: u32 = 32;
-
-const MAX_PHYSICS_VEL: f32 = 250.0;
-
-fn update_actor_position<T: Actor>(actor: &mut T, dt: f32) {
-    // Clamp the velocity to the max efficiently
-    let norm_sq = actor.velocity().norm_squared();
-    if norm_sq > MAX_PHYSICS_VEL.powi(2) {
-        let new_velocity = actor.velocity() / norm_sq.sqrt() * MAX_PHYSICS_VEL;
-        actor.set_velocity(new_velocity);
-    }
-    let dv = actor.velocity() * (dt);
-    let new_position = actor.position() + dv;
-    actor.set_position(new_position);
-    actor.rotate();
-}
-
-/// Takes an actor and wraps its position to the bounds of the
-/// screen, so if it goes off the left side of the screen it
-/// will re-enter on the right side and so on.
-fn wrap_actor_position<T: Actor>(actor: &mut T, sx: f32, sy: f32) {
-    // Wrap screen
-    let sprite_half_size = (SPRITE_SIZE / 2) as f32;
-    let actor_center = actor.position();
-    if actor_center.x > sx {
-        actor.add_x(-sx);
-    } else if actor_center.x < 0. {
-        actor.add_x(sx);
-    };
-    if actor_center.y > sy {
-        actor.add_y(-sy);
-    } else if actor_center.y < 0. {
-        actor.add_y(sy);
-    }
-}
 
 fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 	actor.add_life(-dt)
@@ -204,32 +158,29 @@ impl EventHandler for MainState {
 
         while timer::check_update_time(ctx, DESIRED_FPS) {
             let seconds = 1.0 / (DESIRED_FPS as f32);
+            let coords = (self.screen_width, self.screen_height);
 
-            // Update the player state based on the user input.
-            self.player.handle_input(&self.input, seconds);
-            self.player.update(ctx, &mut self.asset_manager, seconds);
-            if self.input.fire && self.player.can_fire() {
-                self.shots.push(self.player.fire_shot(ctx, &mut self.asset_manager));
-            }
+            {
+                let am = &mut self.asset_manager;
 
-            // Update the physics for all actors.
-            // First the player...
-            update_actor_position(&mut self.player, seconds);
-            wrap_actor_position(&mut self.player,
-                                self.screen_width as f32,
-                                self.screen_height as f32);
+                // Update the player state based on the user input.
+                self.player.handle_input(&self.input, seconds);
+                if self.input.fire && self.player.can_fire() {
+                    self.shots.push(self.player.fire_shot(ctx, am));
+                }
 
-            // Then the shots...
-            for act in &mut self.shots {
-                update_actor_position(act, seconds);
-                wrap_actor_position(act, self.screen_width as f32, self.screen_height as f32);
-                handle_timed_life(act, seconds);
-            }
+                self.player.update(ctx, am, coords, seconds);
 
-            // And finally the rocks.
-            for act in &mut self.rocks {
-                update_actor_position(act, seconds);
-                wrap_actor_position(act, self.screen_width as f32, self.screen_height as f32);
+                // Then the shots...
+                for act in &mut self.shots {
+                    act.update(ctx, am, coords, seconds);
+                    handle_timed_life(act, seconds);
+                }
+
+                // And finally the rocks.
+                for act in &mut self.rocks {
+                    act.update(ctx, am, coords, seconds);
+                }
             }
 
             // Handle the results of things moving:

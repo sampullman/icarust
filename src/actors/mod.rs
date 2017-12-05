@@ -11,6 +11,8 @@ pub mod player;
 
 use assets::{Sprite, Asset, AssetManager};
 
+const MAX_PHYSICS_VEL: f32 = 250.0;
+
 #[derive(Debug)]
 pub struct BaseActor<T: Asset> {
     pub asset: T,
@@ -93,8 +95,42 @@ pub trait Actor: Sized {
     }
 }
 
-pub trait Updatable {
-    fn update(&mut self, ctx: &mut Context, asset_manager: &mut AssetManager, dt: f32);
+/// Update position based on current velocity
+pub fn update_actor_position<T: Actor>(actor: &mut T, dt: f32) {
+    // Clamp the velocity to the max
+    let norm_sq = actor.velocity().norm_squared();
+    if norm_sq > MAX_PHYSICS_VEL.powi(2) {
+        let new_velocity = actor.velocity() / norm_sq.sqrt() * MAX_PHYSICS_VEL;
+        actor.set_velocity(new_velocity);
+    }
+    let dv = actor.velocity() * (dt);
+    let new_position = actor.position() + dv;
+    actor.set_position(new_position);
+    actor.rotate();
+}
+
+/// Takes an actor and wraps its position to the bounds of the
+/// screen, so if it goes off the left side of the screen it
+/// will re-enter on the right side and so on.
+pub fn wrap_actor_position<T: Actor>(actor: &mut T, sx: f32, sy: f32) {
+    let actor_center = actor.position();
+    if actor_center.x > sx {
+        actor.add_x(-sx);
+    } else if actor_center.x < 0. {
+        actor.add_x(sx);
+    };
+    if actor_center.y > sy {
+        actor.set_y(sy);
+    } else if actor_center.y < 0. {
+        actor.add_y(sy);
+    }
+}
+
+pub trait Updatable: Actor {
+    fn update(&mut self, ctx: &mut Context, asset_manager: &mut AssetManager, world_coords: (u32, u32), dt: f32) {
+        update_actor_position(self, dt);
+        wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32)
+    }
 }
 
 pub trait Inputable: Actor {
@@ -120,7 +156,9 @@ pub trait Collidable: Actor {
 }
 
 impl Collidable for Rock {}
+impl Updatable for Rock {}
 impl Collidable for Shot {}
+impl Updatable for Shot {}
 
 const SHOT_LIFE: f32 = 2.0;
 const ROCK_LIFE: f32 = 1.0;
