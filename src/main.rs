@@ -271,8 +271,7 @@ impl EventHandler for MainState {
         let coords = (self.screen_width, self.screen_height);
         {
 
-            let p = &self.player;
-            p.draw(ctx, coords);
+            self.player.draw(ctx, coords);
 
             for s in &self.shots {
                 s.draw(ctx, coords);

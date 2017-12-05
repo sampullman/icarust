@@ -16,7 +16,7 @@ const SHOT_SPEED: f32 = 240.0;
 
 #[derive(Debug, Actor)]
 pub struct Player {
-	pub actor: BaseActor<Sprite>,
+	pub base: BaseActor<Sprite>,
     shot_timeout: f32,
     shot_sound_id: SoundId,
 }
@@ -25,7 +25,7 @@ impl Collidable for Player {}
 
 pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen_width: f32, screen_height: f32) -> Player {
     Player {
-		actor: BaseActor {
+		base: BaseActor {
             asset: asset_manager.make_sprite(ctx, "/player.png"),
         	pos: Point2::new(screen_width / 2.0, screen_height / 2.0),
         	facing: 0.,
@@ -36,6 +36,13 @@ pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen
 		},
         shot_timeout: 0.0,
         shot_sound_id: asset_manager.add_sound(ctx, "/pew.ogg"),
+    }
+}
+
+impl Drawable for Player {
+    
+    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32)) {
+        self.base.asset.draw(ctx, world_coords, self.position(), self.facing())
     }
 }
 

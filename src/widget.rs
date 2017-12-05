@@ -1,4 +1,5 @@
 use assets::{Asset, AssetManager, Text};
+use actors::Drawable;
 use ggez::{Context, GameResult};
 use ggez::graphics::Point2;
 
@@ -11,8 +12,6 @@ struct BaseWidget<T: Asset> {
 
 pub trait Widget {
 
-    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32));
-
     fn position(&self) -> Point2;
     fn set_position(&mut self, pos: Point2);
     fn facing(&self) -> f32;
@@ -21,7 +20,7 @@ pub trait Widget {
     fn height(&self) -> u32;
 }
 
-#[derive(Debug, Widget)]
+#[derive(Debug, Widget, Drawable)]
 pub struct TextWidget {
     base: BaseWidget<Text>
 }

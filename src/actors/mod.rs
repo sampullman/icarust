@@ -25,18 +25,21 @@ pub struct BaseActor<T: Asset> {
     pub life: f32,
 }
 
-#[derive(Debug, Actor)]
+#[derive(Debug, Actor, Drawable)]
 pub struct Shot {
-	pub actor: BaseActor<Sprite>,
+	pub base: BaseActor<Sprite>,
 }
 
-#[derive(Debug, Actor)]
+#[derive(Debug, Actor, Drawable)]
 pub struct Rock {
-	pub actor: BaseActor<Sprite>,
+	pub base: BaseActor<Sprite>,
+}
+
+pub trait Drawable {
+    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32));
 }
 
 pub trait Actor: Sized {
-    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32));
 
     fn position(&self) -> Point2;
 	fn set_position(&mut self, pos: Point2);
@@ -125,7 +128,7 @@ const SHOT_RVEL: f32 = 0.1;
 
 pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock {
     Rock {
-		actor: BaseActor {
+		base: BaseActor {
             asset: asset_manager.make_sprite(ctx, "/rock.png"),            
         	pos: Point2::origin(),
         	facing: 0.,
@@ -158,7 +161,7 @@ pub fn create_rocks(ctx: &mut Context, asset_manager: &mut AssetManager, num: i3
 
 pub fn create_shot(ctx: &mut Context, asset_manager: &mut AssetManager) -> Shot {
     Shot {
-		actor: BaseActor {
+		base: BaseActor {
             asset: asset_manager.make_sprite(ctx, "/shot.png"),
         	pos: Point2::origin(),
         	facing: 0.,
