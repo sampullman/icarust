@@ -75,6 +75,16 @@ impl AssetManager {
 
 pub trait Asset {
     fn draw(&self, ctx: &mut Context, world_coords: (u32, u32), position: Point2, facing: f32);
+
+    fn width(&self) -> u32;
+    fn height(&self) -> u32;
+
+    fn half_width(&self) -> f32 {
+        (self.width() as f32) / 2.0
+    }
+    fn half_height(&self) -> f32 {
+        (self.height() as f32) / 2.0
+    }
 }
 
 #[derive(Debug)]
@@ -86,6 +96,13 @@ impl Asset for Sprite {
 
     fn draw(&self, ctx: &mut Context, world_coords: (u32, u32), position: Point2, facing: f32) {
         util::draw_image(ctx, &*self.image, position, facing, world_coords).unwrap();
+    }
+    
+    fn width(&self) -> u32 {
+        self.image.width()
+    }
+    fn height(&self) -> u32 {
+        self.image.height()
     }
 }
 
@@ -99,5 +116,12 @@ impl Asset for Text {
 
     fn draw(&self, ctx: &mut Context, world_coords: (u32, u32), position: Point2, facing: f32) {
         util::draw_image(ctx, &self.text, position, facing, world_coords).unwrap();
+    }
+    
+    fn width(&self) -> u32 {
+        self.text.width()
+    }
+    fn height(&self) -> u32 {
+        self.text.height()
     }
 }

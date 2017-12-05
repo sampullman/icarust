@@ -65,7 +65,7 @@ fn update_actor_position<T: Actor>(actor: &mut T, dt: f32) {
 fn wrap_actor_position<T: Actor>(actor: &mut T, sx: f32, sy: f32) {
     // Wrap screen
     let sprite_half_size = (SPRITE_SIZE / 2) as f32;
-    let actor_center = actor.position() - Vector2::new(-sprite_half_size, sprite_half_size);
+    let actor_center = actor.position();
     if actor_center.x > sx {
         actor.add_x(-sx);
     } else if actor_center.x < 0. {
@@ -255,8 +255,8 @@ impl EventHandler for MainState {
                 break
             } else if self.player.life() <= 0.0 {
             
-                println!("Game over!");
-                let _ = ctx.quit();
+                //println!("Game over!");
+                //let _ = ctx.quit();
             }
         }
 

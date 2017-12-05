@@ -41,6 +41,11 @@ pub trait Drawable {
 
 pub trait Actor: Sized {
 
+    fn width(&self) -> f32;
+    fn height(&self) -> f32;
+    fn half_width(&self) -> f32;
+    fn half_height(&self) -> f32;
+
     fn position(&self) -> Point2;
 	fn set_position(&mut self, pos: Point2);
     fn add_position(&mut self, pos: Point2);

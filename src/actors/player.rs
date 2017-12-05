@@ -5,8 +5,8 @@ use assets::{AssetManager, SoundId, Sprite};
 const PLAYER_LIFE: f32 = 1.0;
 const PLAYER_BBOX: f32 = 12.0;
 
-const PLAYER_THRUST: f32 = 200.0;//380.0;
-const PLAYER_GRAVITY: f32 = 0.0;//120.0;
+const PLAYER_THRUST: f32 = 380.0;
+const PLAYER_GRAVITY: f32 = 120.0;
 // Rotation in radians per second.
 const PLAYER_TURN_RATE: f32 = 3.1;
 
@@ -14,7 +14,7 @@ const PLAYER_TURN_RATE: f32 = 3.1;
 const PLAYER_SHOT_TIME: f32 = 0.5;
 const SHOT_SPEED: f32 = 240.0;
 
-#[derive(Debug, Actor)]
+#[derive(Debug, Actor, WrappedDrawable)]
 pub struct Player {
 	pub base: BaseActor<Sprite>,
     shot_timeout: f32,
@@ -36,13 +36,6 @@ pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen
 		},
         shot_timeout: 0.0,
         shot_sound_id: asset_manager.add_sound(ctx, "/pew.ogg"),
-    }
-}
-
-impl Drawable for Player {
-
-    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32)) {
-        self.base.asset.draw(ctx, world_coords, self.position(), self.facing())
     }
 }
 
