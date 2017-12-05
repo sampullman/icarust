@@ -255,8 +255,8 @@ impl EventHandler for MainState {
                 break
             } else if self.player.life() <= 0.0 {
             
-                //println!("Game over!");
-                //let _ = ctx.quit();
+                println!("Game over!");
+                let _ = ctx.quit();
             }
         }
 
