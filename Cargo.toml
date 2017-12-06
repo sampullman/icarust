@@ -13,3 +13,4 @@ path = "../icarust-derive/"
 [dependencies]
 rand = "0.3"
 nalgebra = "0.13"
+ncollide = "0.13"

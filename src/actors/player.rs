@@ -5,7 +5,7 @@ use assets::{AssetManager, SoundId, Sprite};
 const PLAYER_LIFE: f32 = 1.0;
 const PLAYER_BBOX: f32 = 12.0;
 
-const PLAYER_THRUST: f32 = 380.0;
+const PLAYER_THRUST: f32 = 420.0;
 const PLAYER_GRAVITY: f32 = 120.0;
 // Rotation in radians per second.
 const PLAYER_TURN_RATE: f32 = 3.1;

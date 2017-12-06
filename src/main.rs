@@ -5,6 +5,8 @@
 #[macro_use] extern crate icarust_derive;
 extern crate ggez;
 extern crate rand;
+extern crate nalgebra as na;
+extern crate ncollide;
 use ggez::conf;
 use ggez::event::*;
 use ggez::{Context, GameResult};
@@ -31,6 +33,8 @@ use assets::{AssetManager, SoundId};
 
 pub mod widget;
 use widget::{Widget, TextWidget};
+
+pub mod physics;
 
 fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 	actor.add_life(-dt)
@@ -178,9 +182,12 @@ impl EventHandler for MainState {
                 }
 
                 // And finally the rocks.
+                let mut rocks_pos: Vec<Point2> = Vec::new();
                 for act in &mut self.rocks {
                     act.update(ctx, am, coords, seconds);
+                    rocks_pos.push(act.position());
                 }
+                physics::test_collide(self.player.position(), &rocks_pos);
             }
 
             // Handle the results of things moving:
