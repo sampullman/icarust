@@ -2,7 +2,6 @@
 use actors::*;
 use assets::{AssetManager, SoundId, Sprite};
 
-const PLAYER_LIFE: f32 = 1.0;
 const PLAYER_BBOX: f32 = 12.0;
 
 const PLAYER_THRUST: f32 = 420.0;
@@ -31,8 +30,8 @@ pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen
         	facing: 0.,
         	velocity: na::zero(),
         	bbox_size: PLAYER_BBOX,
-        	life: PLAYER_LIFE,
             rvel: 0.,
+            alive: true,
 		},
         shot_timeout: 0.0,
         shot_sound_id: asset_manager.add_sound(ctx, "/pew.ogg"),

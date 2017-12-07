@@ -38,10 +38,6 @@ use widget::{Widget, TextWidget};
 pub mod physics;
 use physics::CollisionWorld2;
 
-fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
-	actor.add_life(-dt)
-}
-
 /// **********************************************************************
 /// The `MainState` is our game's "global" state, it keeps track of
 /// everything we need for actually running the game.
@@ -116,8 +112,8 @@ impl MainState {
     }
 
     fn clear_dead_stuff(&mut self) {
-        self.shots.retain(|s| s.life() > 0.0);
-        self.rocks.retain(|r| r.life() > 0.0);
+        self.shots.retain(|s| s.alive());
+        self.rocks.retain(|r| r.alive());
     }
 
     fn handle_collisions(&mut self) {
@@ -181,10 +177,10 @@ impl EventHandler for MainState {
                 self.player.update(ctx, am, coords, seconds);
 
                 // Then the shots...
-                for act in &mut self.shots {
-                    act.update(ctx, am, coords, seconds);
-                    handle_timed_life(act, seconds);
-                }
+                //for act in &mut self.shots {
+                //    act.update(ctx, am, coords, seconds);
+                //}
+                self.shots.iter_mut().for_each(|s| s.update(ctx, am, coords, seconds));
 
                 // And finally the rocks.
                 let mut rocks_pos: Vec<Point2> = Vec::new();
@@ -216,7 +212,7 @@ impl EventHandler for MainState {
             if self.input.quit {
                 ctx.quit().unwrap();
                 break
-            } else if self.player.life() <= 0.0 {
+            } else if !self.player.alive() {
             
                 //println!("Game over!");
                 //let _ = ctx.quit();
@@ -233,16 +229,9 @@ impl EventHandler for MainState {
 
         let coords = (self.screen_width, self.screen_height);
         {
-
             self.player.draw(ctx, coords);
-
-            for s in &self.shots {
-                s.draw(ctx, coords);
-            }
-
-            for r in &self.rocks {
-                r.draw(ctx, coords);
-            }
+            self.shots.iter().for_each(|s| s.draw(ctx, coords));
+            self.rocks.iter().for_each(|r| r.draw(ctx, coords));
         }
 
         self.debug_text.draw(ctx, coords);

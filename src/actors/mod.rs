@@ -20,15 +20,13 @@ pub struct BaseActor<T: Asset> {
     pub velocity: Vector2,
     pub bbox_size: f32,
     pub rvel: f32,
-
-    // For shots, it is the time left to live,
-    // for players and rocks, it is the actual hit points.
-    pub life: f32,
+    pub alive: bool,
 }
 
 #[derive(Debug, Actor, Drawable)]
 pub struct Shot {
 	pub base: BaseActor<Sprite>,
+    pub time_to_live: f32,
 }
 
 pub trait Drawable {
@@ -36,6 +34,9 @@ pub trait Drawable {
 }
 
 pub trait Actor: Sized {
+
+    fn alive(&self) -> bool;
+    fn kill(&mut self);
 
     fn width(&self) -> f32;
     fn height(&self) -> f32;
@@ -74,13 +75,6 @@ pub trait Actor: Sized {
     }
 
     fn bbox_size(&self) -> f32;
-
-	fn life(&self) -> f32;
-	fn set_life(&mut self, life: f32);
-	fn add_life(&mut self, life: f32) {
-        let new_life = self.life() + life;
-        self.set_life(new_life)
-    }
 
     fn rvel(&self) -> f32;
     fn rotate(&mut self) {
@@ -145,11 +139,22 @@ pub trait Collidable: Actor {
     }
 
     fn handle_collision<T: Actor>(&mut self, _other: &T) {
-        self.set_life(0.0);
+        self.kill();
     }
 }
 impl Collidable for Shot {}
-impl Updatable for Shot {}
+
+impl Updatable for Shot {
+
+    fn update(&mut self, _ctx: &mut Context, _asset_manager: &mut AssetManager, world_coords: (u32, u32), dt: f32) {
+        update_actor_position(self, dt);
+        wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32);
+	    self.time_to_live -= dt;
+        if self.time_to_live < 0.0 {
+            self.kill();
+        }
+    }
+}
 
 const SHOT_LIFE: f32 = 2.0;
 const SHOT_BBOX: f32 = 6.0;
@@ -163,8 +168,9 @@ pub fn create_shot(ctx: &mut Context, asset_manager: &mut AssetManager) -> Shot 
         	facing: 0.,
         	velocity: na::zero(),
         	bbox_size: SHOT_BBOX,
-        	life: SHOT_LIFE,
             rvel: SHOT_RVEL,
+            alive: true,
 		},
+        time_to_live: SHOT_LIFE,
     }
 }

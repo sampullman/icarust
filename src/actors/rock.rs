@@ -8,7 +8,6 @@ use na;
 use assets::{Sprite, Asset, AssetManager};
 use util::*;
 
-const ROCK_LIFE: f32 = 1.0;
 const MAX_ROCK_VEL: f32 = 50.0;
 
 const ROCK_BBOX: f32 = 12.0;
@@ -29,8 +28,8 @@ pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock 
         	facing: 0.,
         	velocity: na::zero(),
         	bbox_size: ROCK_BBOX,
-        	life: ROCK_LIFE,
             rvel: 0.,
+            alive: true,
 		},
     }
 }
