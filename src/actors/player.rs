@@ -52,7 +52,7 @@ impl Inputable for Player {
 
 impl Updatable for Player {
 
-    fn update(&mut self, ctx: &mut Context, asset_manager: &mut AssetManager, world_coords: (u32, u32), dt: f32) {
+    fn update(&mut self, _ctx: &mut Context, _asset_manager: &mut AssetManager, world_coords: (u32, u32), dt: f32) {
         update_actor_position(self, dt);
         wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32);
         

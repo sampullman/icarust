@@ -6,8 +6,10 @@ use ncollide::world::{CollisionWorld, CollisionGroups, GeometricQueryType, Colli
 use ncollide::narrow_phase::{ContactHandler, ContactAlgorithm2};
 use ncollide::shape::{Plane, Ball, Cuboid, ShapeHandle2};
 
+pub type CollisionWorld2 = CollisionWorld<Point2<f32>, Isometry2<f32>, CollisionObjectData>;
+
 #[derive(Clone)]
-struct CollisionObjectData {
+pub struct CollisionObjectData {
     pub name:     &'static str,
     pub velocity: Option<Cell<Vector2<f32>>>
 }
@@ -59,7 +61,7 @@ impl ContactHandler<Point2<f32>, Isometry2<f32>, CollisionObjectData> for Veloci
     }
 }
 
-pub fn test_collide(player_point: Point2<f32>, rocks: &Vec<Point2<f32>>) {
+pub fn new_world(rock_count: i32) -> CollisionWorld2 {
     let plane_bottom = ShapeHandle2::new(Plane::new(Vector2::y()));
     let plane_bottom_pos = Isometry2::new(Vector2::new(0.0, 50.0), na::zero());
     let plane_data = CollisionObjectData::new("ground", None);
@@ -67,7 +69,6 @@ pub fn test_collide(player_point: Point2<f32>, rocks: &Vec<Point2<f32>>) {
     // Shared cuboid for the rectangular areas.
     let player = ShapeHandle2::new(Cuboid::new(Vector2::new(32f32, 32.0)));
     let player_data = CollisionObjectData::new("player", None);
-    let player_pos = Isometry2::new(Vector2::new(player_point.x, player_point.y), na::zero());
     let mut player_groups = CollisionGroups::new();
     player_groups.set_membership(&[1]);
 
@@ -88,14 +89,27 @@ pub fn test_collide(player_point: Point2<f32>, rocks: &Vec<Point2<f32>>) {
 
     world.deferred_add(0, plane_bottom_pos, plane_bottom, others_groups, contacts_query, plane_data);
     let mut index = 1;
-    for rock_point in rocks.into_iter() {
-        let rock_pos = Isometry2::new(Vector2::new(rock_point.x, rock_point.y), na::zero());
+    for rock_point in (0..rock_count).into_iter() {
+        let rock_pos = Isometry2::identity();
         world.deferred_add(index, rock_pos, rock.clone(), rock_groups, contacts_query, rock_data.clone());
         index += 1;
     }
-    world.deferred_add(index, player_pos, player, player_groups, GeometricQueryType::Contacts(0.0), player_data);
+    world.deferred_add(index, Isometry2::identity(), player, player_groups, GeometricQueryType::Contacts(0.0), player_data);
 
     world.register_contact_handler("VelocityBouncer", VelocityBouncer);
 
-    world.update()
+    world
+}
+
+pub fn update_world(world: &mut CollisionWorld2, player_point: Point2<f32>, rocks: &Vec<Point2<f32>>) {
+
+    let player_pos = Isometry2::new(Vector2::new(player_point.x, player_point.y), na::zero());
+    world.deferred_set_position(6, player_pos);
+
+    let mut index = 1;
+    for rock_point in rocks.into_iter() {
+        world.deferred_set_position(index, Isometry2::new(Vector2::new(rock_point.x, rock_point.y), na::zero()));
+        index += 1;
+    }
+    world.update();
 }

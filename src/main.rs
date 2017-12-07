@@ -36,6 +36,7 @@ pub mod widget;
 use widget::{Widget, TextWidget};
 
 pub mod physics;
+use physics::CollisionWorld2;
 
 fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 	actor.add_life(-dt)
@@ -53,6 +54,7 @@ fn handle_timed_life<T: Actor>(actor: &mut T, dt: f32) {
 
 struct MainState {
     asset_manager: AssetManager,
+    world: CollisionWorld2,
     player: Player,
     shots: Vec<Shot>,
     rocks: Vec<Rock>,
@@ -83,7 +85,8 @@ impl MainState {
         let screen_height = ctx.conf.window_mode.height;
 
         let player = create_player(ctx, &mut am, screen_width as f32, screen_height as f32);
-        let rocks = create_rocks(ctx, &mut am, 5, player.position(), 100.0, 250.0);
+        let rock_count = 5;
+        let rocks = create_rocks(ctx, &mut am, rock_count, player.position(), 100.0, 250.0);
 
         let debug_text = TextWidget::new(ctx, &mut am, 16)?;
         let score_text = TextWidget::new(ctx, &mut am, 16)?;
@@ -93,6 +96,7 @@ impl MainState {
 
         let s = MainState {
             asset_manager: am,
+            world:  physics::new_world(rock_count),
             player: player,
             shots: Vec::new(),
             rocks: rocks,
@@ -188,7 +192,7 @@ impl EventHandler for MainState {
                     act.update(ctx, am, coords, seconds);
                     rocks_pos.push(act.position());
                 }
-                physics::test_collide(self.player.position(), &rocks_pos);
+                physics::update_world(&mut self.world, self.player.position(), &rocks_pos);
             }
 
             // Handle the results of things moving:
