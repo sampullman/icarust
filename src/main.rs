@@ -21,6 +21,7 @@ use ggez::graphics::{Point2};
 mod actors;
 use actors::*;
 use actors::player::{create_player, Player};
+use actors::rock::{create_rocks, Rock};
 
 mod util;
 use util::*;

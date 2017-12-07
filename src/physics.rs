@@ -17,8 +17,8 @@ impl CollisionObjectData {
         let init_velocity;
         if let Some(velocity) = velocity {
             init_velocity = Some(Cell::new(velocity))
-        }
-        else {
+            
+        } else {
             init_velocity = None
         }
 
@@ -49,7 +49,7 @@ impl ContactHandler<Point2<f32>, Isometry2<f32>, CollisionObjectData> for Veloci
             let normal = -collector[0].normal;
             vel.set(vel.get() - 2.0 * na::dot(&vel.get(), &normal) * normal);
         }
-        println!("CONTACT!");
+        println!("CONTACT! {} {}", co1.data.name, co2.data.name);
     }
 
     fn handle_contact_stopped(&mut self,
@@ -80,7 +80,7 @@ pub fn test_collide(player_point: Point2<f32>, rocks: &Vec<Point2<f32>>) {
 
     let mut others_groups = CollisionGroups::new();
     others_groups.set_membership(&[3]);
-    others_groups.set_whitelist(&[1]);
+    others_groups.set_whitelist(&[1, 2]);
 
     let mut world = CollisionWorld::new(0.02, true);
 

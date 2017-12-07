@@ -8,6 +8,7 @@ use util::*;
 use input::InputState;
 
 pub mod player;
+pub mod rock;
 
 use assets::{Sprite, Asset, AssetManager};
 
@@ -29,11 +30,6 @@ pub struct BaseActor<T: Asset> {
 
 #[derive(Debug, Actor, Drawable)]
 pub struct Shot {
-	pub base: BaseActor<Sprite>,
-}
-
-#[derive(Debug, Actor, Drawable)]
-pub struct Rock {
 	pub base: BaseActor<Sprite>,
 }
 
@@ -154,53 +150,12 @@ pub trait Collidable: Actor {
         self.set_life(0.0);
     }
 }
-
-impl Collidable for Rock {}
-impl Updatable for Rock {}
 impl Collidable for Shot {}
 impl Updatable for Shot {}
 
 const SHOT_LIFE: f32 = 2.0;
-const ROCK_LIFE: f32 = 1.0;
-const MAX_ROCK_VEL: f32 = 50.0;
-
-const ROCK_BBOX: f32 = 12.0;
 const SHOT_BBOX: f32 = 6.0;
-
 const SHOT_RVEL: f32 = 0.1;
-
-pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock {
-    Rock {
-		base: BaseActor {
-            asset: asset_manager.make_sprite(ctx, "/rock.png"),            
-        	pos: Point2::origin(),
-        	facing: 0.,
-        	velocity: na::zero(),
-        	bbox_size: ROCK_BBOX,
-        	life: ROCK_LIFE,
-            rvel: 0.,
-		},
-    }
-}
-
-/// Create the given number of rocks.
-/// Makes sure that none of them are within the
-/// given exclusion zone (nominally the player)
-/// Note that this *could* create rocks outside the
-/// bounds of the playing field, so it should be
-/// called before `wrap_actor_position()` happens.
-pub fn create_rocks(ctx: &mut Context, asset_manager: &mut AssetManager, num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Rock> {
-    assert!(max_radius > min_radius);
-    let new_rock = |_| {
-        let mut rock = create_rock(ctx, asset_manager);
-        let r_angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
-        let r_distance = rand::random::<f32>() * (max_radius - min_radius) + min_radius;
-        rock.set_position(exclusion + vec_from_angle(r_angle) * r_distance);
-        rock.set_velocity(random_vec(MAX_ROCK_VEL));
-        rock
-    };
-    (0..num).map(new_rock).collect()
-}
 
 pub fn create_shot(ctx: &mut Context, asset_manager: &mut AssetManager) -> Shot {
     Shot {
