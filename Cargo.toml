@@ -11,6 +11,6 @@ version = "*"
 path = "../icarust-derive/"
 
 [dependencies]
-rand = "0.3"
+rand = "0.4"
 nalgebra = "0.14"
 ncollide = "0.14"

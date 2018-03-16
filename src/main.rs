@@ -1,6 +1,4 @@
-//! An Asteroids-ish example game to show off ggez.
-//! The idea is that this game is simple but still
-//! non-trivial enough to be interesting.
+//! A Sopwith/Luftrauser style shoot 'em up
 
 #[macro_use] extern crate icarust_derive;
 extern crate ggez;

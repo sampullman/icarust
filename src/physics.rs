@@ -3,7 +3,6 @@ use std::cell::Cell;
 use na;
 use na::{Vector2, Point2, Isometry2};
 use ncollide::world::{CollisionWorld, CollisionGroups, GeometricQueryType, CollisionObject2};
-use ncollide::narrow_phase::{ContactAlgorithm2};
 use ncollide::shape::{Plane, Ball, Cuboid, ShapeHandle2};
 
 pub type CollisionWorld2 = CollisionWorld<Point2<f32>, Isometry2<f32>, CollisionObjectData>;
@@ -31,7 +30,6 @@ impl CollisionObjectData {
     }
 }
 
-struct VelocityBouncer;
 /*
 impl ContactHandler<Point2<f32>, Isometry2<f32>, CollisionObjectData> for VelocityBouncer {
     fn handle_contact_started(&mut self,
