@@ -5,12 +5,12 @@ authors = ["Sam Pullman <sampullman@gmail.com>"]
 
 [dependencies.ggez]
 path = "../libraries/ggez/"
-version = "0.3"
+version = "*"
 
 [dependencies.icarust-derive]
 path = "../icarust-derive/"
 
 [dependencies]
 rand = "0.3"
-nalgebra = "0.13"
-ncollide = "0.13"
+nalgebra = "0.14"
+ncollide = "0.14"

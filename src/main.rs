@@ -264,23 +264,27 @@ impl EventHandler for MainState {
 }
 
 pub fn main() {
-    let mut c = conf::Conf::new();
-    c.window_title = "Astroblasto!".to_string();
-    c.window_mode.width = 640;
-    c.window_mode.height = 480;
+    use ggez::ContextBuilder;
 
-    let ctx = &mut Context::load_from_conf("icarust", "ggez", c).unwrap();
+    let mut cb = ContextBuilder::new("icarust", "ggez")
+        .window_setup(conf::WindowSetup::default().title("Icarust"))
+        .window_mode(conf::WindowMode::default().dimensions(640, 480));
 
-    // We add the CARGO_MANIFEST_DIR/resources do the filesystems paths so
-    // we we look in the cargo project for files.
+    // Add CARGO_MANIFEST_DIR/resources to the filesystems paths so
+    // we look in the cargo project for files.
     if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
         let mut path = path::PathBuf::from(manifest_dir);
         path.push("resources");
-        ctx.filesystem.mount(&path, true);
         println!("Adding path {:?}", path);
+        // We need this re-assignment alas, see
+        // https://aturon.github.io/ownership/builders.html
+        // under "Consuming builders"
+        cb = cb.add_resource_path(path);
     } else {
-        println!("No manifest directory; cannot load resources.");
+        println!("Not building from cargo?  Ok.");
     }
+
+    let ctx = &mut cb.build().unwrap();
 
     match MainState::new(ctx) {
         Err(e) => {
