@@ -147,10 +147,10 @@ impl MainState {
         // Set TextWidget positions
         //let debug_disp = Point2::new((self.screen_width - ((self.debug_text.width() + 20) / 2)) as f32,
         //                             (self.screen_height - (self.debug_text.height() + 5)) as f32);
-        let level_pos = Point2::new((self.level_text.width() / 2) as f32 + 10.0, 10.0);
+        let level_pos = Point2::new(10.0, 10.0);
         self.level_text.set_position(level_pos);
 
-        let score_pos = Point2::new((self.level_text.width() + self.score_text.width() / 2) as f32 + 20.0, 10.0);
+        let score_pos = Point2::new(self.level_text.width() as f32 + 25.0, 10.0);
         self.score_text.set_position(score_pos);
     }
 }

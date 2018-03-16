@@ -4,9 +4,7 @@ use std;
 use ggez::graphics::{Drawable, DrawParam, Point2, Vector2};
 use ggez::{Context, GameResult};
 
-/// Create a unit vector representing the
-/// given angle (in radians)
-/// BUGGO: TODO: We should be able to create these from a Rotation?
+/// Create a unit vector representing the given angle (in radians)
 pub fn vec_from_angle(angle: f32) -> Vector2 {
     let vx = angle.sin();
     let vy = angle.cos();

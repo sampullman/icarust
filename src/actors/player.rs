@@ -71,14 +71,20 @@ impl Player {
     }
 
     pub fn fire_shot(&mut self, ctx: &mut Context, am: &mut AssetManager) -> Shot {
+        use na::Vector2;
 
         self.shot_timeout = PLAYER_SHOT_TIME;
 
         let mut shot = create_shot(ctx, am);
-        shot.set_position(self.position());
+
         shot.set_facing(self.facing());
         let direction = vec_from_angle(shot.facing());
 		shot.set_velocity_xy(SHOT_SPEED * direction.x, SHOT_SPEED * direction.y);
+
+        let player_center = Point2::new(self.x()+self.half_width(), self.y()-self.half_height());
+        let shot_pos = self.center(); //player_center + (direction.normalize() * self.half_height());
+        shot.set_position(shot_pos);
+        println!("Shot {}", self.facing());
 
         let _ = am.get_sound(self.shot_sound_id).play();
         shot

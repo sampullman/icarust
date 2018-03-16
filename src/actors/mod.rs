@@ -42,6 +42,7 @@ pub trait Actor: Sized {
     fn height(&self) -> f32;
     fn half_width(&self) -> f32;
     fn half_height(&self) -> f32;
+    fn center(&self) -> Point2;
 
     fn position(&self) -> Point2;
 	fn set_position(&mut self, pos: Point2);
