@@ -1,7 +1,7 @@
 
 use rand;
 use std;
-use ggez::graphics::{Drawable, DrawParam, Point2, Vector2};
+use ggez::graphics::{Drawable, Point2, Vector2};
 use ggez::{graphics, Context, GameResult};
 
 /// Create a unit vector representing the given angle (in radians)
@@ -19,12 +19,9 @@ pub fn random_vec(max_magnitude: f32) -> Vector2 {
 }
 
 pub fn print_instructions() {
-    println!();
-    println!("Welcome to ASTROBLASTO!");
-    println!();
+    println!("\nWelcome to Icarust!\n");
     println!("How to play:");
-    println!("L/R arrow keys rotate your ship, up thrusts, space bar fires");
-    println!();
+    println!("L/R arrow keys rotate your ship, up thrusts, space bar fires\n");
 }
 
 /// Translate the world coordinates (Y pointing up, origin at bottom left)
@@ -39,8 +36,8 @@ pub fn draw_image(ctx: &mut Context,
               drawable: &Drawable,
               position: Point2,
               facing: f32,
-              world_coords: (u32, u32))
-              -> GameResult<()> {
+              world_coords: (u32, u32)) -> GameResult<()> {
+
     let (screen_w, screen_h) = world_coords;
     let pos = world_to_screen_coords(screen_w, screen_h, position);
 
