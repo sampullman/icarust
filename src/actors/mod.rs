@@ -10,7 +10,7 @@ pub mod rock;
 
 use assets::{Sprite, Asset, AssetManager};
 
-const MAX_PHYSICS_VEL: f32 = 250.0;
+const MAX_PHYSICS_VEL: f32 = 320.0;
 
 #[derive(Debug)]
 pub struct BaseActor<T: Asset> {
@@ -87,10 +87,8 @@ pub trait Actor: Sized {
 /// Update position based on current velocity
 pub fn update_actor_position<T: Actor>(actor: &mut T, dt: f32) {
     // Clamp the velocity to the max
-    let norm_sq = actor.velocity().norm_squared();
-    if norm_sq > MAX_PHYSICS_VEL.powi(2) {
-        let new_velocity = actor.velocity() / norm_sq.sqrt() * MAX_PHYSICS_VEL;
-        actor.set_velocity(new_velocity);
+    if let Some(clamped) = clamp_velocity(actor.velocity(), MAX_PHYSICS_VEL) {
+        actor.set_velocity(clamped);
     }
     let dv = actor.velocity() * (dt);
     let new_position = actor.position() + dv;

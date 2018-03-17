@@ -4,14 +4,14 @@ use assets::{AssetManager, SoundId, Sprite};
 
 const PLAYER_BBOX: f32 = 12.0;
 
-const PLAYER_THRUST: f32 = 420.0;
-const PLAYER_GRAVITY: f32 = 120.0;
+const PLAYER_THRUST: f32 = 500.0;
+const PLAYER_GRAVITY: f32 = 110.0;
 // Rotation in radians per second.
-const PLAYER_TURN_RATE: f32 = 3.1;
+const PLAYER_TURN_RATE: f32 = 2.8;
 
 // Seconds between shots
 const PLAYER_SHOT_TIME: f32 = 0.5;
-const SHOT_SPEED: f32 = 240.0;
+const SHOT_SPEED: f32 = 340.0;
 
 #[derive(Debug, Actor, WrappedDrawable)]
 pub struct Player {
@@ -58,9 +58,12 @@ impl Updatable for Player {
         self.shot_timeout -= dt;
 
         let direction_vector = vec_from_angle(self.facing());
-        let drag_vector = direction_vector * -1.25;
+        let drag_vector = direction_vector * -40.0;
         let gravity_vector = Vector2::new(0.0, -PLAYER_GRAVITY);
-        //self.add_velocity((gravity_vector + drag_vector) * dt);
+        self.add_velocity((gravity_vector + drag_vector) * dt);
+        if let Some(clamped) = clamp_velocity(self.velocity(), 240.0) {
+            self.set_velocity(clamped);
+        }
     }
 }
 
@@ -78,7 +81,8 @@ impl Player {
 
         shot.set_facing(self.facing());
         let direction = vec_from_angle(shot.facing());
-		shot.set_velocity_xy(SHOT_SPEED * direction.x, SHOT_SPEED * direction.y);
+        let speed = direction * SHOT_SPEED + self.velocity();
+		shot.set_velocity(speed);
 
         let pos = direction * self.half_height();
         shot.set_position(self.position() + pos);

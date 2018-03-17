@@ -24,6 +24,14 @@ pub fn print_instructions() {
     println!("L/R arrow keys rotate your ship, up thrusts, space bar fires\n");
 }
 
+pub fn clamp_velocity(velocity: Vector2, max: f32) -> Option<Vector2> {
+    let norm_sq = velocity.norm_squared();
+    if norm_sq > max.powi(2) {
+        return Some(velocity / norm_sq.sqrt() * max)
+    }
+    None
+}
+
 /// Translate the world coordinates (Y pointing up, origin at bottom left)
 /// to screen coordinates (Y pointing down, origin at top left)
 fn world_to_screen_coords(_screen_width: u32, screen_height: u32, point: Point2) -> Point2 {
