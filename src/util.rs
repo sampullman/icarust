@@ -2,7 +2,7 @@
 use rand;
 use std;
 use ggez::graphics::{Drawable, DrawParam, Point2, Vector2};
-use ggez::{Context, GameResult};
+use ggez::{graphics, Context, GameResult};
 
 /// Create a unit vector representing the given angle (in radians)
 pub fn vec_from_angle(angle: f32) -> Vector2 {
@@ -27,10 +27,8 @@ pub fn print_instructions() {
     println!();
 }
 
-/// Translates the world coordinate system, which
-/// has Y pointing up and the origin at the center,
-/// to the screen coordinate system, which has Y
-/// pointing downward and the origin at the top-left,
+/// Translate the world coordinates (Y pointing up, origin at bottom left)
+/// to screen coordinates (Y pointing down, origin at top left)
 fn world_to_screen_coords(_screen_width: u32, screen_height: u32, point: Point2) -> Point2 {
     let height = screen_height as f32;
 
@@ -46,10 +44,11 @@ pub fn draw_image(ctx: &mut Context,
     let (screen_w, screen_h) = world_coords;
     let pos = world_to_screen_coords(screen_w, screen_h, position);
 
-    //graphics::draw(ctx, drawable, dest_point, facing)
-    drawable.draw_ex(ctx, DrawParam { 
-                            dest: pos,
-                            rotation: facing,
-                            ..Default::default()
-    })
+    let drawparams = graphics::DrawParam {
+        dest: pos,
+        rotation: facing,
+        offset: graphics::Point2::new(0.5, 0.5),
+        ..Default::default()
+    };
+    graphics::draw_ex(ctx, drawable, drawparams)
 }

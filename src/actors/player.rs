@@ -60,7 +60,7 @@ impl Updatable for Player {
         let direction_vector = vec_from_angle(self.facing());
         let drag_vector = direction_vector * -1.25;
         let gravity_vector = Vector2::new(0.0, -PLAYER_GRAVITY);
-        self.add_velocity((gravity_vector + drag_vector) * dt);
+        //self.add_velocity((gravity_vector + drag_vector) * dt);
     }
 }
 
