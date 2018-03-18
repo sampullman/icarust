@@ -1,16 +1,18 @@
 
 use actors::*;
 use assets::{AssetManager, SoundId, Sprite};
+use actors::shot::{create_shot, Shot};
 
 const PLAYER_BBOX: f32 = 12.0;
 
-const PLAYER_THRUST: f32 = 500.0;
+const PLAYER_THRUST: f32 = 540.0;
+const PLAYER_MAX_SPEED: f32 = 220.0;
 const PLAYER_GRAVITY: f32 = 110.0;
 // Rotation in radians per second.
 const PLAYER_TURN_RATE: f32 = 2.8;
 
 // Seconds between shots
-const PLAYER_SHOT_TIME: f32 = 0.5;
+const PLAYER_SHOT_TIME: f32 = 0.3;
 const SHOT_SPEED: f32 = 340.0;
 
 #[derive(Debug, Actor, WrappedDrawable)]
@@ -61,7 +63,7 @@ impl Updatable for Player {
         let drag_vector = direction_vector * -40.0;
         let gravity_vector = Vector2::new(0.0, -PLAYER_GRAVITY);
         self.add_velocity((gravity_vector + drag_vector) * dt);
-        if let Some(clamped) = clamp_velocity(self.velocity(), 240.0) {
+        if let Some(clamped) = clamp_velocity(self.velocity(), PLAYER_MAX_SPEED) {
             self.set_velocity(clamped);
         }
     }
@@ -81,12 +83,11 @@ impl Player {
 
         shot.set_facing(self.facing());
         let direction = vec_from_angle(shot.facing());
-        let speed = direction * SHOT_SPEED + self.velocity();
-		shot.set_velocity(speed);
+
+		shot.set_velocity(direction * SHOT_SPEED);
 
         let pos = direction * self.half_height();
         shot.set_position(self.position() + pos);
-        println!("Shot {}", self.facing());
 
         let _ = am.get_sound(self.shot_sound_id).play();
         shot
@@ -98,4 +99,3 @@ fn player_thrust<T: Actor>(actor: &mut T, dt: f32) {
     let thrust_vector = direction_vector * (PLAYER_THRUST);
     actor.add_velocity(thrust_vector * (dt));
 }
-

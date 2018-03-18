@@ -2,9 +2,8 @@
 use ggez::event::{Keycode, Mod};
 
 /// **********************************************************************
-/// The `InputState` is exactly what it sounds like, it just keeps track of
-/// the user's input state so that we turn keyboard events into something
-/// state-based and device-independent.
+/// `InputState` keeps track of the user's input state in order to make
+/// keyboard events state-based and device-independent.
 /// **********************************************************************
 #[derive(Debug)]
 pub struct InputState {
@@ -44,7 +43,7 @@ impl InputState {
             Keycode::Escape => {
                 self.quit = true;
             },
-            _ => (), // Do nothing
+            _ => (),
         }
     }
 
@@ -59,7 +58,7 @@ impl InputState {
             Keycode::Space => {
                 self.fire = false;
             }
-            _ => (), // Do nothing
+            _ => (),
         }
     }
 }

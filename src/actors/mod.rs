@@ -7,6 +7,7 @@ use input::InputState;
 
 pub mod player;
 pub mod rock;
+pub mod shot;
 
 use assets::{Sprite, Asset, AssetManager};
 
@@ -21,12 +22,6 @@ pub struct BaseActor<T: Asset> {
     pub bbox_size: f32,
     pub rvel: f32,
     pub alive: bool,
-}
-
-#[derive(Debug, Actor, Drawable)]
-pub struct Shot {
-	pub base: BaseActor<Sprite>,
-    pub time_to_live: f32,
 }
 
 pub trait Drawable {
@@ -90,26 +85,24 @@ pub fn update_actor_position<T: Actor>(actor: &mut T, dt: f32) {
     if let Some(clamped) = clamp_velocity(actor.velocity(), MAX_PHYSICS_VEL) {
         actor.set_velocity(clamped);
     }
-    let dv = actor.velocity() * (dt);
+    let dv = actor.velocity() * dt;
     let new_position = actor.position() + dv;
     actor.set_position(new_position);
     actor.rotate();
 }
 
-/// Takes an actor and wraps its position to the bounds of the
-/// screen, so if it goes off the left side of the screen it
-/// will re-enter on the right side and so on.
-pub fn wrap_actor_position<T: Actor>(actor: &mut T, sx: f32, sy: f32) {
+/// Wraps an actor's position to the bounds of the world
+pub fn wrap_actor_position<T: Actor>(actor: &mut T, wx: f32, wy: f32) {
     let actor_center = actor.position();
-    if actor_center.x > sx {
-        actor.add_x(-sx);
+    if actor_center.x > wx {
+        actor.add_x(-wx);
     } else if actor_center.x < 0. {
-        actor.add_x(sx);
+        actor.add_x(wx);
     };
-    if actor_center.y > sy {
-        actor.set_y(sy);
+    if actor_center.y > wy {
+        actor.set_y(wy);
     } else if actor_center.y < 0. {
-        actor.add_y(sy);
+        actor.add_y(wy);
     }
 }
 
@@ -139,37 +132,5 @@ pub trait Collidable: Actor {
 
     fn handle_collision<T: Actor>(&mut self, _other: &T) {
         self.kill();
-    }
-}
-impl Collidable for Shot {}
-
-impl Updatable for Shot {
-
-    fn update(&mut self, _ctx: &mut Context, _asset_manager: &mut AssetManager, world_coords: (u32, u32), dt: f32) {
-        update_actor_position(self, dt);
-        wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32);
-	    self.time_to_live -= dt;
-        if self.time_to_live < 0.0 {
-            self.kill();
-        }
-    }
-}
-
-const SHOT_LIFE: f32 = 2.0;
-const SHOT_BBOX: f32 = 6.0;
-const SHOT_RVEL: f32 = 0.1;
-
-pub fn create_shot(ctx: &mut Context, asset_manager: &mut AssetManager) -> Shot {
-    Shot {
-		base: BaseActor {
-            asset: asset_manager.make_sprite(ctx, "/shot.png"),
-        	pos: Point2::origin(),
-        	facing: 0.,
-        	velocity: na::zero(),
-        	bbox_size: SHOT_BBOX,
-            rvel: SHOT_RVEL,
-            alive: true,
-		},
-        time_to_live: SHOT_LIFE,
     }
 }

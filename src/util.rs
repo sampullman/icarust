@@ -11,7 +11,6 @@ pub fn vec_from_angle(angle: f32) -> Vector2 {
     Vector2::new(vx, vy)
 }
 
-/// BUGGO: TODO: Vector2 implements Rand so this is unnecessary
 pub fn random_vec(max_magnitude: f32) -> Vector2 {
     let angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
     let mag = rand::random::<f32>() * max_magnitude;
@@ -32,7 +31,7 @@ pub fn clamp_velocity(velocity: Vector2, max: f32) -> Option<Vector2> {
     None
 }
 
-/// Translate the world coordinates (Y pointing up, origin at bottom left)
+/// Translate world coordinates (Y pointing up, origin at bottom left)
 /// to screen coordinates (Y pointing down, origin at top left)
 fn world_to_screen_coords(_screen_width: u32, screen_height: u32, point: Point2) -> Point2 {
     let height = screen_height as f32;

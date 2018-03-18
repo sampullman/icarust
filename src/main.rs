@@ -5,11 +5,8 @@ extern crate ggez;
 extern crate rand;
 extern crate nalgebra as na;
 extern crate ncollide;
-use ggez::conf;
 use ggez::event::*;
-use ggez::{Context, GameResult};
-use ggez::graphics;
-use ggez::timer;
+use ggez::{conf, Context, GameResult, graphics, timer};
 
 use std::env;
 use std::path;
@@ -18,6 +15,7 @@ use ggez::graphics::{Point2};
 
 mod actors;
 use actors::*;
+use actors::shot::Shot;
 use actors::player::{create_player, Player};
 use actors::rock::{create_rocks, Rock};
 
@@ -37,13 +35,8 @@ pub mod physics;
 use physics::CollisionWorld2;
 
 /// **********************************************************************
-/// The `MainState` is our game's "global" state, it keeps track of
-/// everything we need for actually running the game.
-///
-/// Our game objects are simply a vector for each actor type, and we
-/// probably mingle gameplay-state (like score) and hardware-state
-/// (like gui_dirty) a little more than we should, but for something
-/// this small it hardly matters.
+/// `MainState` is the game's global state, it keeps track of
+/// everything needed for running the game.
 /// **********************************************************************
 
 struct MainState {
@@ -166,7 +159,7 @@ impl EventHandler for MainState {
             {
                 let am = &mut self.asset_manager;
 
-                // Update the player state based on the user input.
+                // Update player state based on the input.
                 self.player.handle_input(&self.input, seconds);
                 if self.input.fire && self.player.can_fire() {
                     self.shots.push(self.player.fire_shot(ctx, am));
@@ -175,9 +168,6 @@ impl EventHandler for MainState {
                 self.player.update(ctx, am, coords, seconds);
 
                 // Then the shots...
-                //for act in &mut self.shots {
-                //    act.update(ctx, am, coords, seconds);
-                //}
                 self.shots.iter_mut().for_each(|s| s.update(ctx, am, coords, seconds));
 
                 // And finally the rocks.
@@ -189,24 +179,22 @@ impl EventHandler for MainState {
                 physics::update_world(&mut self.world, self.player.position(), &rocks_pos);
             }
 
-            // Handle the results of things moving:
-            // collision detection, object death, and if
-            // we have killed all the rocks in the level,
-            // spawn more of them.
+            // Handle the result of movements: collision detection,
+            // object death, and if we have killed all the rocks
+            // in the level, spawn more of them.
             self.handle_collisions();
 
             self.clear_dead_stuff();
 
             self.check_for_level_respawn(ctx);
 
-            // Using a gui_dirty flag here is a little
-            // messy but fine here.
+            // This is a little messy
             if self.gui_dirty {
                 self.update_ui(ctx);
                 self.gui_dirty = false;
             }
 
-            // Finally we check for our end state.
+            // Check for our end state.
             if self.input.quit {
                 ctx.quit().unwrap();
                 break
@@ -236,15 +224,15 @@ impl EventHandler for MainState {
         self.level_text.draw(ctx, coords);
         self.score_text.draw(ctx, coords);
 
-        // Then we flip the screen
+        // Flip the screen
         graphics::present(ctx);
 
-        // And yield the timeslice
+        // Yield the timeslice
         // This tells the OS that we're done using the CPU but it should
         // get back to this program as soon as it can.
         // This ideally prevents the game from using 100% CPU all the time
         // even if vsync is off.
-        // The actual behavior can be a little platform-specific.
+        // The actual behavior can be platform-specific.
         timer::yield_now();
         Ok(())
     }
@@ -253,7 +241,6 @@ impl EventHandler for MainState {
 
         self.input.handle_key_down(keycode, _keymod)
     }
-
 
     fn key_up_event(&mut self, _ctx: &mut Context, keycode: Keycode, _keymod: Mod, _repeat: bool) {
 
@@ -266,7 +253,7 @@ pub fn main() {
 
     let mut cb = ContextBuilder::new("icarust", "ggez")
         .window_setup(conf::WindowSetup::default().title("Icarust"))
-        .window_mode(conf::WindowMode::default().dimensions(640, 480));
+        .window_mode(conf::WindowMode::default().dimensions(1280, 540));
 
     // Add CARGO_MANIFEST_DIR/resources to the filesystems paths so
     // we look in the cargo project for files.

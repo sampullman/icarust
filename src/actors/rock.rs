@@ -34,12 +34,10 @@ pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock 
     }
 }
 
-/// Create the given number of rocks.
-/// Makes sure that none of them are within the
-/// given exclusion zone (nominally the player)
-/// Note that this *could* create rocks outside the
-/// bounds of the playing field, so it should be
-/// called before `wrap_actor_position()` happens.
+/// Create the `num` rocks.
+/// Ensures none of them are within the exclusion zone (nominally the player)
+/// This *could* create rocks outside the world bounds, so it should be
+/// called before `wrap_actor_position()`
 pub fn create_rocks(ctx: &mut Context, asset_manager: &mut AssetManager, num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Rock> {
     assert!(max_radius > min_radius);
     let new_rock = |_| {
