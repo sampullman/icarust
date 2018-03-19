@@ -3,6 +3,7 @@ use ggez::graphics::{Point2, Vector2};
 use rand;
 use std;
 use actors::{Actor, BaseActor, Collidable, Drawable, Updatable};
+use render::camera::Camera;
 use na;
 
 use assets::{Sprite, Asset, AssetManager};

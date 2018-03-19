@@ -9,7 +9,7 @@ const PLAYER_THRUST: f32 = 540.0;
 const PLAYER_MAX_SPEED: f32 = 220.0;
 const PLAYER_GRAVITY: f32 = 110.0;
 // Rotation in radians per second.
-const PLAYER_TURN_RATE: f32 = 2.8;
+const PLAYER_TURN_RATE: f32 = 3.0;
 
 // Seconds between shots
 const PLAYER_SHOT_TIME: f32 = 0.3;

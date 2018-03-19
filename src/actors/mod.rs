@@ -4,6 +4,7 @@ use ggez::graphics::{Vector2, Point2};
 use ggez::nalgebra as na;
 use util::*;
 use input::InputState;
+use render::camera::Camera;
 
 pub mod player;
 pub mod rock;
@@ -25,7 +26,7 @@ pub struct BaseActor<T: Asset> {
 }
 
 pub trait Drawable {
-    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32));
+    fn draw(&self, ctx: &mut Context, camera: &Camera);
 }
 
 pub trait Actor: Sized {

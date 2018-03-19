@@ -1,6 +1,7 @@
 
 use ggez::{audio, Context, GameResult, graphics};
 use ggez::graphics::{Image, Font, Point2};
+use render::camera::Camera;
 use std::collections::HashMap;
 use util;
 use std::rc::Rc;
@@ -74,7 +75,7 @@ impl AssetManager {
 }
 
 pub trait Asset {
-    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32), position: Point2, facing: f32);
+    fn draw(&self, ctx: &mut Context, camera: &Camera, position: Point2, facing: f32);
 
     fn width(&self) -> u32;
     fn height(&self) -> u32;
@@ -94,8 +95,8 @@ pub struct Sprite {
 
 impl Asset for Sprite {
 
-    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32), position: Point2, facing: f32) {
-        util::draw_image(ctx, &*self.image, position, facing, world_coords).unwrap();
+    fn draw(&self, ctx: &mut Context, camera: &Camera, position: Point2, facing: f32) {
+        util::draw_image(ctx, &*self.image, position, facing, camera).unwrap();
     }
     
     fn width(&self) -> u32 {
@@ -114,8 +115,8 @@ pub struct Text {
 
 impl Asset for Text {
 
-    fn draw(&self, ctx: &mut Context, world_coords: (u32, u32), position: Point2, facing: f32) {
-        util::draw_image(ctx, &self.text, position, facing, world_coords).unwrap();
+    fn draw(&self, ctx: &mut Context, camera: &Camera, position: Point2, facing: f32) {
+        util::draw_image(ctx, &self.text, position, facing, camera).unwrap();
     }
     
     fn width(&self) -> u32 {

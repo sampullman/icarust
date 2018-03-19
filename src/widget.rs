@@ -1,5 +1,6 @@
 use assets::{Asset, AssetManager, Text};
 use actors::Drawable;
+use render::camera::Camera;
 use ggez::{Context, GameResult};
 use ggez::graphics::Point2;
 

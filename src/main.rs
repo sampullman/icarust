@@ -25,6 +25,9 @@ use util::*;
 mod input;
 use input::*;
 
+mod render;
+use render::camera::Camera;
+
 pub mod assets;
 use assets::{AssetManager, SoundId};
 
@@ -34,6 +37,9 @@ use widget::{Widget, TextWidget};
 pub mod physics;
 use physics::CollisionWorld2;
 
+const WINDOW_WIDTH: u32 = 1280;
+const WINDOW_HEIGHT: u32 = 540;
+
 /// **********************************************************************
 /// `MainState` is the game's global state, it keeps track of
 /// everything needed for running the game.
@@ -42,6 +48,7 @@ use physics::CollisionWorld2;
 struct MainState {
     asset_manager: AssetManager,
     world: CollisionWorld2,
+    camera: Camera,
     player: Player,
     shots: Vec<Shot>,
     rocks: Vec<Rock>,
@@ -81,9 +88,15 @@ impl MainState {
 
         let hit_sound_id = am.add_sound(ctx, "/boom.ogg");
 
+        let view_width = WINDOW_WIDTH as f32;
+        let view_height = WINDOW_HEIGHT as f32;
+        let mut camera = Camera::new(screen_width, screen_height, view_width, view_height);
+        camera.set_y_limits((screen_height as f32 / 4.0, screen_height as f32 * 0.75));
+
         let s = MainState {
             asset_manager: am,
             world:  physics::new_world(rock_count),
+            camera: camera,
             player: player,
             shots: Vec::new(),
             rocks: rocks,
@@ -179,6 +192,8 @@ impl EventHandler for MainState {
                 physics::update_world(&mut self.world, self.player.position(), &rocks_pos);
             }
 
+            self.camera.move_to(self.player.position());
+
             // Handle the result of movements: collision detection,
             // object death, and if we have killed all the rocks
             // in the level, spawn more of them.
@@ -212,17 +227,15 @@ impl EventHandler for MainState {
 
         // Clear the screen
         graphics::clear(ctx);
-
-        let coords = (self.screen_width, self.screen_height);
         {
-            self.player.draw(ctx, coords);
-            self.shots.iter().for_each(|s| s.draw(ctx, coords));
-            self.rocks.iter().for_each(|r| r.draw(ctx, coords));
+            self.player.draw(ctx, &self.camera);
+            self.shots.iter().for_each(|s| s.draw(ctx, &self.camera));
+            self.rocks.iter().for_each(|r| r.draw(ctx, &self.camera));
         }
 
-        self.debug_text.draw(ctx, coords);
-        self.level_text.draw(ctx, coords);
-        self.score_text.draw(ctx, coords);
+        self.debug_text.draw(ctx, &self.camera);
+        self.level_text.draw(ctx, &self.camera);
+        self.score_text.draw(ctx, &self.camera);
 
         // Flip the screen
         graphics::present(ctx);
@@ -253,7 +266,7 @@ pub fn main() {
 
     let mut cb = ContextBuilder::new("icarust", "ggez")
         .window_setup(conf::WindowSetup::default().title("Icarust"))
-        .window_mode(conf::WindowMode::default().dimensions(1280, 540));
+        .window_mode(conf::WindowMode::default().dimensions(WINDOW_WIDTH, WINDOW_HEIGHT));
 
     // Add CARGO_MANIFEST_DIR/resources to the filesystems paths so
     // we look in the cargo project for files.
