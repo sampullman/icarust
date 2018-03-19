@@ -92,6 +92,7 @@ impl MainState {
         let view_height = WINDOW_HEIGHT as f32;
         let mut camera = Camera::new(screen_width, screen_height, view_width, view_height);
         camera.set_y_limits((screen_height as f32 / 4.0, screen_height as f32 * 0.75));
+        camera.set_x_wrap(true);
 
         let s = MainState {
             asset_manager: am,
