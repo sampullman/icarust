@@ -3,6 +3,7 @@ use actors::Drawable;
 use render::camera::Camera;
 use ggez::{Context, GameResult};
 use ggez::graphics::Point2;
+use util;
 
 #[derive(Debug)]
 struct BaseWidget<T: Asset> {
@@ -19,6 +20,8 @@ pub trait Widget {
     fn set_facing(&mut self, facing: f32);
     fn width(&self) -> u32;
     fn height(&self) -> u32;
+    fn half_width(&self) -> f32;
+    fn half_height(&self) -> f32;
 }
 
 #[derive(Debug, Widget, Drawable)]

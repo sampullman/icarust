@@ -1,5 +1,6 @@
 
 use actors::*;
+use util;
 
 const SHOT_LIFE: f32 = 2.0;
 const SHOT_BBOX: f32 = 6.0;

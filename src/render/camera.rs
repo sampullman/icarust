@@ -74,6 +74,11 @@ impl Camera {
         Point2::new(x, y)
     }
 
+    pub fn static_world_to_screen_coords(&self, from: Point2) -> Point2 {
+        let y = self.world_size.y - from.y;
+        Point2::new(from.x, y)
+    }
+
     // p_screen = max_p - p + max_p/2
     // p_screen - max_p/2 = max_p - p
     // p_screen - max_p/2 + max_p = -p
@@ -103,10 +108,15 @@ pub trait CameraDraw where Self: Drawable {
     fn draw_ex_camera(&self,
                       camera: &Camera,
                       ctx: &mut Context,
-                      p: graphics::DrawParam)
+                      p: graphics::DrawParam,
+                      is_static: bool)
                       -> GameResult<()> {
 
-        let dest = camera.world_to_screen_coords(p.dest);
+        let dest = if is_static {
+            camera.static_world_to_screen_coords(p.dest)
+        } else {
+            camera.world_to_screen_coords(p.dest)
+        };
         let mut my_p = p;
         my_p.dest = dest;
         self.draw_ex(ctx, my_p)

@@ -40,6 +40,9 @@ use physics::CollisionWorld2;
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 540;
 
+const WORLD_WIDTH: f32 = WINDOW_WIDTH as f32 * 4.0;
+const WORLD_HEIGHT: f32 = WINDOW_HEIGHT as f32;
+
 /// **********************************************************************
 /// `MainState` is the game's global state, it keeps track of
 /// everything needed for running the game.
@@ -154,10 +157,10 @@ impl MainState {
         // Set TextWidget positions
         //let debug_disp = Point2::new((self.screen_width - ((self.debug_text.width() + 20) / 2)) as f32,
         //                             (self.screen_height - (self.debug_text.height() + 5)) as f32);
-        let level_pos = Point2::new(10.0, 10.0);
+        let level_pos = Point2::new(self.level_text.half_width() + 10.0, 10.0);
         self.level_text.set_position(level_pos);
 
-        let score_pos = Point2::new(self.level_text.width() as f32 + 25.0, 10.0);
+        let score_pos = Point2::new(self.level_text.width() as f32 + self.score_text.half_width() + 25.0, 10.0);
         self.score_text.set_position(score_pos);
     }
 }
@@ -233,6 +236,9 @@ impl EventHandler for MainState {
             self.shots.iter().for_each(|s| s.draw(ctx, &self.camera));
             self.rocks.iter().for_each(|r| r.draw(ctx, &self.camera));
         }
+        let p1 = self.camera.world_to_screen_coords(Point2::new(-WORLD_WIDTH, 32.0));
+        let p2 = self.camera.world_to_screen_coords(Point2::new(WORLD_WIDTH, 32.0));
+        let _ = graphics::line(ctx, &[p1, p2], 2.0);
 
         self.debug_text.draw(ctx, &self.camera);
         self.level_text.draw(ctx, &self.camera);

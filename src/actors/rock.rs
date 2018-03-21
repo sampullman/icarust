@@ -7,7 +7,7 @@ use render::camera::Camera;
 use na;
 
 use assets::{Sprite, Asset, AssetManager};
-use util::*;
+use util;
 
 const MAX_ROCK_VEL: f32 = 50.0;
 
@@ -45,8 +45,8 @@ pub fn create_rocks(ctx: &mut Context, asset_manager: &mut AssetManager, num: i3
         let mut rock = create_rock(ctx, asset_manager);
         let r_angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
         let r_distance = rand::random::<f32>() * (max_radius - min_radius) + min_radius;
-        rock.set_position(exclusion + vec_from_angle(r_angle) * r_distance);
-        rock.set_velocity(random_vec(MAX_ROCK_VEL));
+        rock.set_position(exclusion + util::vec_from_angle(r_angle) * r_distance);
+        rock.set_velocity(util::random_vec(MAX_ROCK_VEL));
         rock
     };
     (0..num).map(new_rock).collect()

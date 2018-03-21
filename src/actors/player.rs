@@ -2,6 +2,7 @@
 use actors::*;
 use assets::{AssetManager, SoundId, Sprite};
 use actors::shot::{create_shot, Shot};
+use util;
 
 const PLAYER_BBOX: f32 = 12.0;
 
