@@ -1,16 +1,18 @@
 [package]
 name = "icarust"
 version = "0.1.0"
+edition = "2018"
 authors = ["Sam Pullman <sampullman@gmail.com>"]
 
-[dependencies.ggez]
-path = "../libraries/ggez/"
-version = "*"
+[patch.crates-io]
+ggez = { path = "../libraries/ggez" }
 
 [dependencies.icarust-derive]
 path = "../icarust-derive/"
 
 [dependencies]
-rand = "0.4"
-nalgebra = "0.14"
-ncollide = "0.14"
+ggez = "*"
+rand = "0.6"
+na = { package = "nalgebra", version = "0.16", features = ["mint"] }
+mint = "0.5"
+ncollide2d = "0.17"

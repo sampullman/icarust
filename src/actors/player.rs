@@ -1,8 +1,13 @@
 
-use actors::*;
-use assets::{AssetManager, SoundId, Sprite};
-use actors::shot::{create_shot, Shot};
-use util;
+use na::{Point2, Vector2};
+use ggez::Context;
+use crate::input::InputState;
+use crate::assets::{AssetManager, SoundId, Sprite};
+use crate::actors;
+use crate::actors::{Actor, BaseActor, Collidable, Drawable, Inputable, Updatable};
+use crate::actors::shot::{create_shot, Shot};
+use crate::render::camera::Camera;
+use crate::util;
 
 const PLAYER_BBOX: f32 = 12.0;
 
@@ -55,16 +60,16 @@ impl Inputable for Player {
 impl Updatable for Player {
 
     fn update(&mut self, _ctx: &mut Context, _asset_manager: &mut AssetManager, world_coords: (u32, u32), dt: f32) {
-        update_actor_position(self, dt);
-        wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32);
+        actors::update_actor_position(self, dt);
+        actors::wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32);
         
         self.shot_timeout -= dt;
 
-        let direction_vector = vec_from_angle(self.facing());
+        let direction_vector = util::vec_from_angle(self.facing());
         let drag_vector = direction_vector * -40.0;
         let gravity_vector = Vector2::new(0.0, -PLAYER_GRAVITY);
         self.add_velocity((gravity_vector + drag_vector) * dt);
-        if let Some(clamped) = clamp_velocity(self.velocity(), PLAYER_MAX_SPEED) {
+        if let Some(clamped) = util::clamp_velocity(self.velocity(), PLAYER_MAX_SPEED) {
             self.set_velocity(clamped);
         }
     }
@@ -83,7 +88,7 @@ impl Player {
         let mut shot = create_shot(ctx, am);
 
         shot.set_facing(self.facing());
-        let direction = vec_from_angle(shot.facing());
+        let direction = util::vec_from_angle(shot.facing());
 
 		shot.set_velocity(direction * SHOT_SPEED);
 
@@ -96,7 +101,7 @@ impl Player {
 }
 
 fn player_thrust<T: Actor>(actor: &mut T, dt: f32) {
-    let direction_vector = vec_from_angle(actor.facing());
+    let direction_vector = util::vec_from_angle(actor.facing());
     let thrust_vector = direction_vector * (PLAYER_THRUST);
     actor.add_velocity(thrust_vector * (dt));
 }

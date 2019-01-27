@@ -2,12 +2,12 @@ use ggez::Context;
 use ggez::graphics::{Point2, Vector2};
 use rand;
 use std;
-use actors::{Actor, BaseActor, Collidable, Drawable, Updatable};
-use render::camera::Camera;
+use crate::actors::{Actor, BaseActor, Collidable, Drawable, Updatable};
+use crate::render::camera::Camera;
 use na;
 
-use assets::{Sprite, Asset, AssetManager};
-use util;
+use crate::assets::{Sprite, Asset, AssetManager};
+use crate::util;
 
 const MAX_ROCK_VEL: f32 = 50.0;
 

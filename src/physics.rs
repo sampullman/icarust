@@ -2,8 +2,8 @@
 use std::cell::Cell;
 use na;
 use na::{Vector2, Point2, Isometry2};
-use ncollide::world::{CollisionWorld, CollisionGroups, GeometricQueryType, CollisionObject2};
-use ncollide::shape::{Plane, Ball, Cuboid, ShapeHandle2};
+use ncollide2d::world::{CollisionWorld, CollisionGroups, GeometricQueryType, CollisionObject};
+use ncollide2d::shape::{Plane, Ball, Cuboid, ShapeHandle};
 
 pub type CollisionWorld2 = CollisionWorld<Point2<f32>, Isometry2<f32>, CollisionObjectData>;
 
@@ -61,18 +61,18 @@ impl ContactHandler<Point2<f32>, Isometry2<f32>, CollisionObjectData> for Veloci
 */
 
 pub fn new_world(rock_count: i32) -> CollisionWorld2 {
-    let plane_bottom = ShapeHandle2::new(Plane::new(Vector2::<f32>::y_axis()));
+    let plane_bottom = ShapeHandle::new(Plane::new(Vector2::<f32>::y_axis()));
     let plane_bottom_pos = Isometry2::new(Vector2::new(0.0, 50.0), na::zero());
     let plane_data = CollisionObjectData::new("ground", None);
 
     // Shared cuboid for the rectangular areas.
-    let player = ShapeHandle2::new(Cuboid::new(Vector2::new(32f32, 32.0)));
+    let player = ShapeHandle::new(Cuboid::new(Vector2::new(32f32, 32.0)));
     let player_data = CollisionObjectData::new("player", None);
     let mut player_groups = CollisionGroups::new();
     player_groups.set_membership(&[1]);
 
     // Rock shape.
-    let rock = ShapeHandle2::new(Ball::new(16f32));
+    let rock = ShapeHandle::new(Ball::new(16f32));
     let rock_data = CollisionObjectData::new("rock", None);
     let mut rock_groups = CollisionGroups::new();
     rock_groups.set_membership(&[2]);

@@ -2,9 +2,9 @@
 use rand;
 use std;
 use ggez::graphics::{Point2, Vector2};
-use ggez::{graphics, Context, GameResult};
-use render::camera::{Camera, CameraDraw};
-use assets::Asset;
+use ggez::{graphics, Context};
+use crate::render::camera::{Camera};
+use crate::assets::Asset;
 
 /// Create a unit vector representing the given angle (in radians)
 pub fn vec_from_angle(angle: f32) -> Vector2 {

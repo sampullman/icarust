@@ -1,10 +1,6 @@
 //! A Sopwith/Luftrauser style shoot 'em up
 
 #[macro_use] extern crate icarust_derive;
-extern crate ggez;
-extern crate rand;
-extern crate nalgebra as na;
-extern crate ncollide;
 use ggez::event::*;
 use ggez::{conf, Context, GameResult, graphics, timer};
 
@@ -14,28 +10,28 @@ use std::path;
 use ggez::graphics::{Point2};
 
 mod actors;
-use actors::*;
-use actors::shot::Shot;
-use actors::player::{create_player, Player};
-use actors::rock::{create_rocks, Rock};
+use crate::actors::*;
+use crate::actors::shot::Shot;
+use crate::actors::player::{create_player, Player};
+use crate::actors::rock::{create_rocks, Rock};
 
 mod util;
-use util::*;
+use crate::util::*;
 
 mod input;
-use input::*;
+use crate::input::*;
 
 mod render;
-use render::camera::Camera;
+use crate::render::camera::Camera;
 
 pub mod assets;
-use assets::{AssetManager, SoundId};
+use crate::assets::{AssetManager, SoundId};
 
 pub mod widget;
-use widget::{Widget, TextWidget};
+use crate::widget::{Widget, TextWidget};
 
 pub mod physics;
-use physics::CollisionWorld2;
+use crate::physics::CollisionWorld2;
 
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 540;

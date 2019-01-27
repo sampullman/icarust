@@ -1,9 +1,8 @@
 
 use ggez::{audio, Context, GameResult, graphics};
-use ggez::graphics::{Drawable, Image, Font, Point2};
-use render::camera::{Camera, CameraDraw};
+use ggez::graphics::{Image, Font};
+use crate::render::camera::{CameraDraw};
 use std::collections::HashMap;
-use util;
 use std::rc::Rc;
 
 pub type SoundId = usize;

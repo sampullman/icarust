@@ -1,16 +1,14 @@
 
 use ggez::Context;
 use ggez::graphics::{Vector2, Point2};
-use ggez::nalgebra as na;
-use util::*;
-use input::InputState;
-use render::camera::Camera;
+use crate::assets::{Sprite, Asset, AssetManager};
+use crate::input::InputState;
+use crate::render::camera::Camera;
+use crate::util;
 
 pub mod player;
 pub mod rock;
 pub mod shot;
-
-use assets::{Sprite, Asset, AssetManager};
 
 const MAX_PHYSICS_VEL: f32 = 320.0;
 
@@ -83,7 +81,7 @@ pub trait Actor: Sized {
 /// Update position based on current velocity
 pub fn update_actor_position<T: Actor>(actor: &mut T, dt: f32) {
     // Clamp the velocity to the max
-    if let Some(clamped) = clamp_velocity(actor.velocity(), MAX_PHYSICS_VEL) {
+    if let Some(clamped) = util::clamp_velocity(actor.velocity(), MAX_PHYSICS_VEL) {
         actor.set_velocity(clamped);
     }
     let dv = actor.velocity() * dt;

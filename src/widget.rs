@@ -1,9 +1,8 @@
-use assets::{Asset, AssetManager, Text};
-use actors::Drawable;
-use render::camera::Camera;
+use crate::assets::{Asset, AssetManager, Text};
+use crate::actors::Drawable;
+use crate::render::camera::Camera;
 use ggez::{Context, GameResult};
 use ggez::graphics::Point2;
-use util;
 
 #[derive(Debug)]
 struct BaseWidget<T: Asset> {
