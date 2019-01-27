@@ -1,6 +1,7 @@
 
 use ggez::{audio, Context, GameResult, graphics};
 use ggez::graphics::{Image, Font};
+use ncollide2d::world::CollisionObjectHandle;
 use crate::render::camera::{CameraDraw};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -11,6 +12,7 @@ pub struct AssetManager {
     image_cache: HashMap<String, Rc<Image>>,
     font_cache: HashMap<String, Rc<Font>>,
     sound_cache: Vec<Rc<audio::Source>>,
+    id_gen: usize,
 }
 
 impl AssetManager {
@@ -19,7 +21,14 @@ impl AssetManager {
         AssetManager {
             image_cache: HashMap::new(),
             font_cache: HashMap::new(),
-            sound_cache: Vec::new(), }
+            sound_cache: Vec::new(),
+            id_gen: 0,
+        }
+    }
+
+    pub fn next_physics_id(&mut self) -> CollisionObjectHandle {
+        self.id_gen += 1;
+        CollisionObjectHandle(self.id_gen)
     }
 
     pub fn add_sound(&mut self, ctx: &mut Context, path: &str) -> SoundId {

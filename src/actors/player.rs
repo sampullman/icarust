@@ -7,6 +7,7 @@ use crate::assets::{Asset, AssetManager, SoundId, Sprite};
 use crate::actors;
 use crate::actors::{Actor, BaseActor, Collidable, Drawable, Inputable, Updatable};
 use crate::actors::shot::{create_shot, Shot};
+use crate::physics::{CollisionWorld2, PhysicsId};
 use crate::render::camera::Camera;
 use crate::util;
 
@@ -41,6 +42,7 @@ pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen
         	bbox_size: PLAYER_BBOX,
             rvel: 0.,
             alive: true,
+            physics_id: asset_manager.next_physics_id(),
 		},
         shot_timeout: 0.0,
         shot_sound_id: asset_manager.add_sound(ctx, "/pew.ogg"),

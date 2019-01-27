@@ -1,10 +1,11 @@
 
 use ggez::Context;
 use ggez::graphics::{Vector2, Point2};
-use ggez::nalgebra as na;
-use util::*;
-use input::InputState;
-use physics::PhysicsId;
+use crate::assets::{Asset, AssetManager};
+use crate::util;
+use crate::input::InputState;
+use crate::physics::{CollisionData, CollisionWorld2, PhysicsId};
+use crate::render::camera::Camera;
 
 pub mod player;
 pub mod rock;
@@ -79,6 +80,8 @@ pub trait Actor: Sized {
     }
 
     fn physics_id(&self) -> PhysicsId;
+
+    fn add_to_world(&mut self, world: &mut CollisionWorld2, id: PhysicsId);
 }
 
 /// Update position based on current velocity
@@ -122,8 +125,8 @@ pub trait Inputable: Actor {
 pub trait Collidable: Actor {
 
     // Provide current velocity for physics simulation
-    fn collision_data(&mut self, other: &mut T) -> bool {
-
+    fn collision_data(&self) -> CollisionData {
+        /*
         let pdistance = other.position() - self.position();
         if pdistance.norm() < (self.bbox_size() + other.bbox_size()) {
 
@@ -132,6 +135,8 @@ pub trait Collidable: Actor {
             return true
         }
         return false
+        */
+        CollisionData::new(self.physics_id(), Some(self.velocity()))
     }
 
     fn handle_collision<T: Actor>(&mut self, _other: &T) {

@@ -31,6 +31,7 @@ pub fn create_shot(ctx: &mut Context, asset_manager: &mut AssetManager) -> Shot 
         	bbox_size: SHOT_BBOX,
             rvel: SHOT_RVEL,
             alive: true,
+            physics_id: asset_manager.next_physics_id(),
 		},
         time_to_live: SHOT_LIFE,
     }

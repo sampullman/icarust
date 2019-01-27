@@ -87,29 +87,36 @@ impl MainState {
 
         let hit_sound_id = am.add_sound(ctx, "/boom.ogg");
 
-        let world = physics::new_world(rock_count);
+        let mut world = physics::new_world(rock_count);
         let player_group_id = world.make_group();
         let rock_group_id = world.make_group();
         let shot_group_id = world.make_group();
+        /*
         world.set_group_whitelist(rock_group_id, &[player_group_id]);
         world.set_group_whitelist(shot_group_id, &[rock_group_id]);
+        */
+
+        let view_width = WINDOW_WIDTH as f32;
+        let view_height = WINDOW_HEIGHT as f32;
+        let camera = Camera::new(screen_width, screen_height, view_width, view_height);
 
         let s = MainState {
             asset_manager: am,
-            world:  world,
-            player: player,
+            world,
+            player,
+            camera,
             shots: Vec::new(),
-            rocks: rocks,
+            rocks,
             level: 0,
             score: 0,
-            hit_sound_id: hit_sound_id,
-            screen_width: screen_width,
-            screen_height: screen_height,
+            hit_sound_id,
+            screen_width,
+            screen_height,
             input: InputState::default(),
             gui_dirty: true,
-            debug_text: debug_text,
-            score_text: score_text,
-            level_text: level_text,
+            debug_text,
+            score_text,
+            level_text,
         };
 
         Ok(s)
@@ -121,6 +128,7 @@ impl MainState {
     }
 
     fn handle_collisions(&mut self) {
+        /*
         for rock in &mut self.rocks {
             self.player.check_collision(rock);
             
@@ -132,6 +140,7 @@ impl MainState {
                }
             }
         }
+        */
     }
 
     fn check_for_level_respawn(&mut self, ctx: &mut Context) {

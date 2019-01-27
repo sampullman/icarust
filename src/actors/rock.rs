@@ -3,6 +3,7 @@ use ggez::graphics::{Point2, Vector2};
 use rand;
 use std;
 use crate::actors::{Actor, BaseActor, Collidable, Drawable, Updatable};
+use crate::physics::{CollisionWorld2, PhysicsId};
 use crate::render::camera::Camera;
 
 use crate::assets::{Sprite, Asset, AssetManager};
@@ -30,6 +31,7 @@ pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock 
         	bbox_size: ROCK_BBOX,
             rvel: 0.,
             alive: true,
+            physics_id: asset_manager.next_physics_id(),
 		},
     }
 }
