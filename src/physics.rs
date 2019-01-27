@@ -1,20 +1,23 @@
 
 use std::cell::Cell;
+use ggez::graphics::{Point2};
 use na;
-use na::{Vector2, Point2, Isometry2};
+use na::{Isometry2};
 use ncollide2d::world::{CollisionWorld, CollisionGroups, GeometricQueryType, CollisionObject};
 use ncollide2d::shape::{Plane, Ball, Cuboid, ShapeHandle};
 
-pub type CollisionWorld2 = CollisionWorld<Point2<f32>, Isometry2<f32>, CollisionObjectData>;
+pub type CollisionWorld2 = CollisionWorld<f32, CollisionObjectData>;
+type NAPoint2 = na::Point2<f32>;
+type NAVector2 = na::Vector2<f32>;
 
 #[derive(Clone)]
 pub struct CollisionObjectData {
     pub name:     &'static str,
-    pub velocity: Option<Cell<Vector2<f32>>>
+    pub velocity: Option<Cell<NAVector2>>
 }
 
 impl CollisionObjectData {
-    pub fn new(name: &'static str, velocity: Option<Vector2<f32>>) -> CollisionObjectData {
+    pub fn new(name: &'static str, velocity: Option<NAVector2>) -> CollisionObjectData {
         let init_velocity;
         if let Some(velocity) = velocity {
             init_velocity = Some(Cell::new(velocity))
@@ -31,7 +34,7 @@ impl CollisionObjectData {
 }
 
 /*
-impl ContactHandler<Point2<f32>, Isometry2<f32>, CollisionObjectData> for VelocityBouncer {
+impl ContactHandler<NAPoint2, Isometry2<f32>, CollisionObjectData> for VelocityBouncer {
     fn handle_contact_started(&mut self,
                               co1: &CollisionObject2<f32, CollisionObjectData>,
                               co2: &CollisionObject2<f32, CollisionObjectData>,
@@ -61,12 +64,12 @@ impl ContactHandler<Point2<f32>, Isometry2<f32>, CollisionObjectData> for Veloci
 */
 
 pub fn new_world(rock_count: i32) -> CollisionWorld2 {
-    let plane_bottom = ShapeHandle::new(Plane::new(Vector2::<f32>::y_axis()));
-    let plane_bottom_pos = Isometry2::new(Vector2::new(0.0, 50.0), na::zero());
+    let plane_bottom = ShapeHandle::new(Plane::new(NAVector2::y_axis()));
+    let plane_bottom_pos = Isometry2::new(NAVector2::new(0.0, 50.0), na::zero());
     let plane_data = CollisionObjectData::new("ground", None);
 
     // Shared cuboid for the rectangular areas.
-    let player = ShapeHandle::new(Cuboid::new(Vector2::new(32f32, 32.0)));
+    let player = ShapeHandle::new(Cuboid::new(NAVector2::new(32f32, 32.0)));
     let player_data = CollisionObjectData::new("player", None);
     let mut player_groups = CollisionGroups::new();
     player_groups.set_membership(&[1]);
@@ -98,14 +101,14 @@ pub fn new_world(rock_count: i32) -> CollisionWorld2 {
     world
 }
 
-pub fn update_world(world: &mut CollisionWorld2, player_point: Point2<f32>, rocks: &Vec<Point2<f32>>) {
+pub fn update_world(world: &mut CollisionWorld2, player_point: Point2, rocks: &Vec<Point2>) {
 
-    let player_pos = Isometry2::new(Vector2::new(player_point.x, player_point.y), na::zero());
+    let player_pos = Isometry2::new(NAVector2::new(player_point.x, player_point.y), na::zero());
     //world.deferred_set_position(6, player_pos);
 
     let mut index = 1;
     for rock_point in rocks.into_iter() {
-        //world.deferred_set_position(index, Isometry2::new(Vector2::new(rock_point.x, rock_point.y), na::zero()));
+        //world.deferred_set_position(index, Isometry2::new(NAVector2::new(rock_point.x, rock_point.y), na::zero()));
         index += 1;
     }
     world.update();

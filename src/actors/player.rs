@@ -1,8 +1,9 @@
 
-use na::{Point2, Vector2};
+
+use ggez::graphics::{Vector2, Point2};
 use ggez::Context;
 use crate::input::InputState;
-use crate::assets::{AssetManager, SoundId, Sprite};
+use crate::assets::{Asset, AssetManager, SoundId, Sprite};
 use crate::actors;
 use crate::actors::{Actor, BaseActor, Collidable, Drawable, Inputable, Updatable};
 use crate::actors::shot::{create_shot, Shot};
@@ -36,7 +37,7 @@ pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen
             asset: asset_manager.make_sprite(ctx, "/player.png"),
         	pos: Point2::new(screen_width / 2.0, screen_height / 2.0),
         	facing: 0.,
-        	velocity: na::zero(),
+        	velocity: Vector2::new(0.0, 0.0),
         	bbox_size: PLAYER_BBOX,
             rvel: 0.,
             alive: true,

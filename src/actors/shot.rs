@@ -31,7 +31,7 @@ pub fn create_shot(ctx: &mut Context, asset_manager: &mut AssetManager) -> Shot 
             asset: asset_manager.make_sprite(ctx, "/shot.png"),
         	pos: Point2::origin(),
         	facing: 0.,
-        	velocity: na::zero(),
+        	velocity: Vector2::new(0.0, 0.0),
         	bbox_size: SHOT_BBOX,
             rvel: SHOT_RVEL,
             alive: true,

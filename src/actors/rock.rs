@@ -4,7 +4,6 @@ use rand;
 use std;
 use crate::actors::{Actor, BaseActor, Collidable, Drawable, Updatable};
 use crate::render::camera::Camera;
-use na;
 
 use crate::assets::{Sprite, Asset, AssetManager};
 use crate::util;
@@ -27,7 +26,7 @@ pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock 
             asset: asset_manager.make_sprite(ctx, "/rock.png"),            
         	pos: Point2::origin(),
         	facing: 0.,
-        	velocity: na::zero(),
+        	velocity: Vector2::new(0.0, 0.0),
         	bbox_size: ROCK_BBOX,
             rvel: 0.,
             alive: true,
