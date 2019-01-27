@@ -3,12 +3,6 @@ use ggez::Context;
 use ggez::graphics::{Point2};
 use assets::{Sprite, Asset, AssetManager};
 
-#[derive(Debug, Actor, Drawable)]
-pub struct Shot {
-	pub base: BaseActor<Sprite>,
-    pub time_to_live: f32,
-}
-
 impl Collidable for Shot {}
 
 impl Updatable for Shot {

@@ -87,16 +87,16 @@ impl MainState {
 
         let hit_sound_id = am.add_sound(ctx, "/boom.ogg");
 
-        let view_width = WINDOW_WIDTH as f32;
-        let view_height = WINDOW_HEIGHT as f32;
-        let mut camera = Camera::new(screen_width, screen_height, view_width, view_height);
-        camera.set_y_limits((screen_height as f32 / 4.0, screen_height as f32 * 0.75));
-        camera.set_x_wrap(true);
+        let world = physics::new_world(rock_count);
+        let player_group_id = world.make_group();
+        let rock_group_id = world.make_group();
+        let shot_group_id = world.make_group();
+        world.set_group_whitelist(rock_group_id, &[player_group_id]);
+        world.set_group_whitelist(shot_group_id, &[rock_group_id]);
 
         let s = MainState {
             asset_manager: am,
-            world:  physics::new_world(rock_count),
-            camera: camera,
+            world:  world,
             player: player,
             shots: Vec::new(),
             rocks: rocks,
@@ -184,12 +184,10 @@ impl EventHandler for MainState {
                 self.shots.iter_mut().for_each(|s| s.update(ctx, am, coords, seconds));
 
                 // And finally the rocks.
-                let mut rocks_pos: Vec<Point2> = Vec::new();
                 for act in &mut self.rocks {
                     act.update(ctx, am, coords, seconds);
-                    rocks_pos.push(act.position());
                 }
-                physics::update_world(&mut self.world, self.player.position(), &rocks_pos);
+                physics::update_world(&mut self.world, &self.player, &self.rocks);
             }
 
             self.camera.move_to(self.player.position());

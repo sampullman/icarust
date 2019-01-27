@@ -2,18 +2,100 @@
 use std::cell::Cell;
 use ggez::graphics::{Point2};
 use na;
-use na::{Isometry2};
-use ncollide2d::world::{CollisionWorld, CollisionGroups, GeometricQueryType, CollisionObject};
-use ncollide2d::shape::{Plane, Ball, Cuboid, ShapeHandle};
+use na::{Vector2, Point2, Isometry2};
+use ncollide::world::{CollisionWorld, CollisionGroups, GeometricQueryType, CollisionObject2};
+use ncollide::narrow_phase::{ContactHandler, ContactAlgorithm2};
+use ncollide::shape::{Plane, Ball, Cuboid, ShapeHandle2};
+use actors::Actor;
 
 pub type CollisionWorld2 = CollisionWorld<f32, CollisionObjectData>;
 type NAPoint2 = na::Point2<f32>;
 type NAVector2 = na::Vector2<f32>;
 
+pub type PhysicsId = u32;
+pub type GroupId = u32;
+
+// Helper/Wrapper for GeometricQueryType
+pub enum Query {
+    Contact,
+    Proximity,
+}
+
+// Indicator for collision geometry type
+pub enum Shape {
+    Rect,
+    Circle,
+}
+
+/// Wrap ncollide's CollisionGroups for easy access to it's ID
+/// This changes the semantics to assume a group only has a single member
+struct CollisionGroup {
+    groups: CollisionGroups,
+    id: GroupId
+}
+
+impl CollisionGroup {
+    fn new::(id: GroupId) {
+        CollisionGroup {
+            groups: CollisionGroups::new(),
+            id: id,
+        }
+    }
+}
+
+pub struct CollisionWorld2 {
+    world: CollisionWorld<Point2<f32>, Isometry2<f32>, CollisionObjectData>,
+    object_id_pool: Vec<PhysicsId>,
+    groups: Vec<CollisionGroup>,
+}
+
+impl CollisionWorld2 {
+
+    fn new() -> CollisionWorld2 {
+        CollitionWorld2 {
+            world: CollisionWorld::new(0.02, true),
+            object_id_pool: Vec::new(),
+            groups: Vec::new(),
+        }
+    }
+
+    pub fn add<T: Actor+Collidable>(&mut self, actor: T, query: Query, group_id: GroupId, shape: Shape) -> PhysicsId {
+        let query_type = match query {
+            Proximity -> GeometricQueryType::Proximity(0.0),
+            Contact -> GeometricQueryType::Contact(0.0),
+        };
+        let shape_handle = ShapeHandle2::new(match shape {
+            Rect -> Cuboid::new(Vector2::new(actor.width(), actor.height())),
+            Circle -> Ball::new((actor.width() + actor.height()) / 2.0),
+        });
+        let index = self.get_index();
+        let position = Isometry2::new(Vector2::new(actor.x(), actor.y()), na::zero());
+        let group = self.get_group(group_id);
+        self.world.deferred_add(index, position, shape_handle, group, query_type, actor.collision_data());
+    }
+
+    pub fn make_group(&mut self) -> GroupId {
+        let id: GroupId = self.groups.len() + 1;
+        self.groups.push(CollisionGroup::new(id));
+        id
+    }
+
+    pub fn get_group(&self, id: GroupId) -> Option<&CollisionGroups> {
+        for group in self.groups.iter() {
+            if group.id == id {
+                return Some(group.groups)
+            }
+        }
+        return None
+    }
+
+}
+
 #[derive(Clone)]
-pub struct CollisionObjectData {
-    pub name:     &'static str,
-    pub velocity: Option<Cell<NAVector2>>
+pub struct CollisionData {
+    pub id: PhysicsId,
+    pub velocity: Option<Cell<Vector2<f32>>>,
+    pub hit: Cell<Option<PhysicsId>>,
 }
 
 impl CollisionObjectData {
@@ -52,7 +134,9 @@ impl ContactHandler<NAPoint2, Isometry2<f32>, CollisionObjectData> for VelocityB
             let normal = -collector[0].normal;
             vel.set(vel.get() - 2.0 * na::dot(&vel.get(), &normal) * normal);
         }
-        println!("CONTACT! {} {}", co1.data.name, co2.data.name);
+        co1.data.hit = Some(co2.data.id);
+        co2.data.hit = Some(co1.data.id);
+        println!("CONTACT! {} {}", co1.data.id, co2.data.id);
     }
 
     fn handle_contact_stopped(&mut self,
@@ -68,47 +152,31 @@ pub fn new_world(rock_count: i32) -> CollisionWorld2 {
     let plane_bottom_pos = Isometry2::new(NAVector2::new(0.0, 50.0), na::zero());
     let plane_data = CollisionObjectData::new("ground", None);
 
-    // Shared cuboid for the rectangular areas.
-    let player = ShapeHandle::new(Cuboid::new(NAVector2::new(32f32, 32.0)));
-    let player_data = CollisionObjectData::new("player", None);
-    let mut player_groups = CollisionGroups::new();
-    player_groups.set_membership(&[1]);
-
-    // Rock shape.
-    let rock = ShapeHandle::new(Ball::new(16f32));
-    let rock_data = CollisionObjectData::new("rock", None);
-    let mut rock_groups = CollisionGroups::new();
-    rock_groups.set_membership(&[2]);
-    rock_groups.set_whitelist(&[1]);
-
     let mut others_groups = CollisionGroups::new();
     others_groups.set_membership(&[3]);
     others_groups.set_whitelist(&[1, 2]);
 
-    let mut world = CollisionWorld::new(0.02);
+    let mut world = CollisionWorld2::new();
 
     let contacts_query = GeometricQueryType::Contacts(0.0, 0.0);
 
-    world.add(plane_bottom_pos, plane_bottom, others_groups, contacts_query, plane_data);
-    for rock_point in (0..rock_count).into_iter() {
-        let rock_pos = Isometry2::identity();
-        world.add(rock_pos, rock.clone(), rock_groups, contacts_query, rock_data.clone());
-    }
-    world.add(Isometry2::identity(), player, player_groups, GeometricQueryType::Contacts(0.0, 0.0), player_data);
+    actor: T, query: Query, group_id: GroupId, shape: Shape
+    world.add(0, plane_bottom_pos, plane_bottom, others_groups, contacts_query, plane_data);
 
     //world.register_contact_handler("VelocityBouncer", VelocityBouncer);
 
     world
 }
 
-pub fn update_world(world: &mut CollisionWorld2, player_point: Point2, rocks: &Vec<Point2>) {
+pub fn update_world<T, U>(world: &mut CollisionWorld2, player: &T, rocks: &Vec<U>)
+        where T: Actor, U: Actor {
 
-    let player_pos = Isometry2::new(NAVector2::new(player_point.x, player_point.y), na::zero());
-    //world.deferred_set_position(6, player_pos);
+    let player_pos = Isometry2::new(Vector2::new(player.x(), player.y()), na::zero());
+    world.deferred_set_position(6, player_pos);
 
     let mut index = 1;
-    for rock_point in rocks.into_iter() {
-        //world.deferred_set_position(index, Isometry2::new(NAVector2::new(rock_point.x, rock_point.y), na::zero()));
+    for rock in rocks.iter() {
+        world.deferred_set_position(index, Isometry2::new(Vector2::new(rock.x(), rock.y()), na::zero()));
         index += 1;
     }
     world.update();

@@ -1,10 +1,10 @@
 
 use ggez::Context;
 use ggez::graphics::{Vector2, Point2};
-use crate::assets::{Sprite, Asset, AssetManager};
-use crate::input::InputState;
-use crate::render::camera::Camera;
-use crate::util;
+use ggez::nalgebra as na;
+use util::*;
+use input::InputState;
+use physics::PhysicsId;
 
 pub mod player;
 pub mod rock;
@@ -21,6 +21,7 @@ pub struct BaseActor<T: Asset> {
     pub bbox_size: f32,
     pub rvel: f32,
     pub alive: bool,
+    pub physics_id: PhysicsId,
 }
 
 pub trait Drawable {
@@ -76,6 +77,8 @@ pub trait Actor: Sized {
         let rvel = self.rvel();
         self.add_facing(rvel)
     }
+
+    fn physics_id(&self) -> PhysicsId;
 }
 
 /// Update position based on current velocity
@@ -117,7 +120,9 @@ pub trait Inputable: Actor {
 }
 
 pub trait Collidable: Actor {
-    fn check_collision<T: Actor+Collidable>(&mut self, other: &mut T) -> bool {
+
+    // Provide current velocity for physics simulation
+    fn collision_data(&mut self, other: &mut T) -> bool {
 
         let pdistance = other.position() - self.position();
         if pdistance.norm() < (self.bbox_size() + other.bbox_size()) {
