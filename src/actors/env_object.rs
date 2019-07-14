@@ -1,6 +1,6 @@
 
 use ggez::Context;
-use ggez::graphics::{Point2};
+use crate::util::{Point2};
 use assets::{Sprite, Asset, AssetManager};
 
 impl Collidable for Shot {}

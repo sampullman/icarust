@@ -4,15 +4,14 @@ version = "0.1.0"
 edition = "2018"
 authors = ["Sam Pullman <sampullman@gmail.com>"]
 
-[patch.crates-io]
-ggez = { path = "../libraries/ggez" }
+[dependencies.ggez]
+path = "../libraries/ggez"
 
 [dependencies.icarust-derive]
 path = "../icarust-derive/"
 
 [dependencies]
-ggez = "*"
 rand = "0.6"
-na = { package = "nalgebra", version = "0.16", features = ["mint"] }
+na = { package = "nalgebra", version = "0.18", features = ["mint"] }
 mint = "0.5"
-ncollide2d = "0.17"
+ncollide2d = "0.19"

@@ -10,7 +10,7 @@ pub type SoundId = usize;
 
 pub struct AssetManager {
     image_cache: HashMap<String, Rc<Image>>,
-    font_cache: HashMap<String, Rc<Font>>,
+    font_cache: HashMap<String, Font>,
     sound_cache: Vec<Rc<audio::Source>>,
     id_gen: usize,
 }
@@ -56,43 +56,42 @@ impl AssetManager {
         Sprite { image: self.get_image(ctx, file) }
     }
 
-    pub fn get_font(&mut self, ctx: &mut Context, key: &str) -> GameResult<Rc<Font>> {
+    pub fn get_font(&mut self, ctx: &mut Context, key: &str) -> GameResult<Font> {
         {
             if let Some(font) = self.font_cache.get(key) {
                 return Ok(font.clone())
             }
         }
 
-        let new_font = Rc::new(Font::new(ctx, "/DejaVuSerif.ttf", 18)?);
+        let new_font = Font::new(ctx, "/DejaVuSerif.ttf")?;
         self.font_cache.insert(key.to_string(), new_font.clone());
         Ok(new_font.clone())
     }
 
-    pub fn make_text(&mut self, ctx: &mut Context, text: &str, file: &str, size: u32) -> GameResult<Text> {
+    pub fn make_text(&mut self, ctx: &mut Context, text: &str, file: &str, size: f32) -> GameResult<Text> {
 
-        let key = format!("{}_{}", file, size);
+        let key = format!("{}", file);
         let font = self.get_font(ctx, &key)?;
-        Ok(Text { text: graphics::Text::new(ctx, text, &font)?, font_key: key })
+        Ok(Text { text: graphics::Text::new((text, font, size)), font_key: key })
     }
 
-    pub fn update_text(&mut self, ctx: &mut Context, text: &mut Text, new_str: &str) {
+    pub fn update_text(&mut self, ctx: &mut Context, text: &mut Text, new_str: &str, size: f32) {
         let font = self.get_font(ctx, &text.font_key).unwrap();
-        text.text = graphics::Text::new(ctx, new_str, &font).unwrap()
-
+        text.text = graphics::Text::new((new_str, font, size))
     }
 }
 
 pub trait Asset {
-    fn drawable(&self) -> &CameraDraw;
+    fn drawable(&self) -> &dyn CameraDraw;
 
-    fn width(&self) -> u32;
-    fn height(&self) -> u32;
+    fn width(&self, ctx: &mut Context) -> u32;
+    fn height(&self, ctx: &mut Context) -> u32;
 
-    fn half_width(&self) -> f32 {
-        (self.width() as f32) / 2.0
+    fn half_width(&self, ctx: &mut Context) -> f32 {
+        (self.width(ctx) as f32) / 2.0
     }
-    fn half_height(&self) -> f32 {
-        (self.height() as f32) / 2.0
+    fn half_height(&self, ctx: &mut Context) -> f32 {
+        (self.height(ctx) as f32) / 2.0
     }
     fn is_static(&self) -> bool {
         false
@@ -106,15 +105,15 @@ pub struct Sprite {
 
 impl Asset for Sprite {
 
-    fn drawable(&self) -> &CameraDraw {
+    fn drawable(&self) -> &dyn CameraDraw {
         &*self.image
     }
     
-    fn width(&self) -> u32 {
-        self.image.width()
+    fn width(&self, ctx: &mut Context) -> u32 {
+        self.image.width().into()
     }
-    fn height(&self) -> u32 {
-        self.image.height()
+    fn height(&self, ctx: &mut Context) -> u32 {
+        self.image.height().into()
     }
 }
 
@@ -126,16 +125,16 @@ pub struct Text {
 
 impl Asset for Text {
 
-    fn drawable(&self) -> &CameraDraw {
+    fn drawable(&self) -> &dyn CameraDraw {
         &self.text
     }
     fn is_static(&self) -> bool {
         true
     }
-    fn width(&self) -> u32 {
-        self.text.width()
+    fn width(&self, ctx: &mut Context) -> u32 {
+        self.text.width(ctx)
     }
-    fn height(&self) -> u32 {
-        self.text.height()
+    fn height(&self, ctx: &mut Context) -> u32 {
+        self.text.height(ctx)
     }
 }

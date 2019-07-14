@@ -1,6 +1,6 @@
 
 use ggez::Context;
-use ggez::graphics::{Point2, Vector2};
+use crate::util::{Point2, Vector2};
 use crate::actors;
 use crate::actors::{BaseActor, Actor, Collidable, Drawable, Updatable};
 use crate::assets::{Sprite, Asset, AssetManager};

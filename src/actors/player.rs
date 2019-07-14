@@ -1,6 +1,4 @@
 
-
-use ggez::graphics::{Vector2, Point2};
 use ggez::Context;
 use crate::input::InputState;
 use crate::assets::{Asset, AssetManager, SoundId, Sprite};
@@ -10,6 +8,7 @@ use crate::actors::shot::{create_shot, Shot};
 use crate::physics::{CollisionWorld2, PhysicsId};
 use crate::render::camera::Camera;
 use crate::util;
+use crate::util::{Point2, Vector2};
 
 const PLAYER_BBOX: f32 = 12.0;
 

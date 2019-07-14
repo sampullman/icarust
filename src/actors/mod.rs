@@ -1,8 +1,8 @@
 
 use ggez::Context;
-use ggez::graphics::{Vector2, Point2};
 use crate::assets::{Asset, AssetManager};
 use crate::util;
+use crate::util::{Vector2, Point2};
 use crate::input::InputState;
 use crate::physics::{CollisionData, CollisionWorld2, PhysicsId};
 use crate::render::camera::Camera;
@@ -34,10 +34,10 @@ pub trait Actor: Sized {
     fn alive(&self) -> bool;
     fn kill(&mut self);
 
-    fn width(&self) -> f32;
-    fn height(&self) -> f32;
-    fn half_width(&self) -> f32;
-    fn half_height(&self) -> f32;
+    fn width(&self, ctx: &mut Context) -> f32;
+    fn height(&self, ctx: &mut Context) -> f32;
+    fn half_width(&self, ctx: &mut Context) -> f32;
+    fn half_height(&self, ctx: &mut Context) -> f32;
     fn center(&self) -> Point2;
 
     fn position(&self) -> Point2;

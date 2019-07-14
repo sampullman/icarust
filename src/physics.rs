@@ -1,12 +1,13 @@
 
 use std::cell::Cell;
-use ggez::graphics::{Vector2};
 use na;
 use na::{Isometry2};
 use ncollide2d::world::{CollisionWorld, CollisionGroups, GeometricQueryType, CollisionObject, CollisionObjectHandle};
 use ncollide2d::narrow_phase::{ContactAlgorithm};
 use ncollide2d::shape::{Plane, Ball, Cuboid, ShapeHandle};
+use ggez::{Context};
 use crate::actors::{Actor, Collidable};
+use crate::util::{Vector2};
 
 type NAPoint2 = na::Point2<f32>;
 type NAVector2 = na::Vector2<f32>;
@@ -58,18 +59,18 @@ impl CollisionWorld2 {
         }
     }
 
-    pub fn add<T: Actor+Collidable>(&mut self, actor: T, query: Query, group_id: GroupId, shape: Shape) -> PhysicsId {
+    pub fn add<T: Actor+Collidable>(&mut self, ctx: &mut Context, actor: T, query: Query, group_id: GroupId, shape: Shape) -> PhysicsId {
         let query_type = match query {
             Proximity => GeometricQueryType::Proximity(0.0),
             Contact => GeometricQueryType::Contacts(0.0, 0.0),
         };
         let shape_handle = match shape {
             Rect => {
-                let cube = Cuboid::new(NAVector2::new(actor.width(), actor.height()));
+                let cube = Cuboid::new(NAVector2::new(actor.width(ctx), actor.height(ctx)));
                 ShapeHandle::new(cube)
             },
             Circle => {
-                let ball = Ball::new((actor.width() + actor.height()) / 2.0);
+                let ball = Ball::new((actor.width(ctx) + actor.height(ctx)) / 2.0);
                 ShapeHandle::new(ball)
             }
         };
@@ -154,7 +155,7 @@ impl ContactHandler<NAPoint2, Isometry2<f32>, CollisionData> for VelocityBouncer
 }
 */
 
-pub fn new_world(rock_count: i32) -> CollisionWorld2 {
+pub fn new_world(ctx: &mut Context, rock_count: i32) -> CollisionWorld2 {
     let plane_bottom = ShapeHandle::new(Plane::new(NAVector2::y_axis()));
     let plane_bottom_pos = Isometry2::new(NAVector2::new(0.0, 50.0), na::zero());
     let plane_data = CollisionData::new(CollisionObjectHandle(0), None); // TODO -- generate unique id

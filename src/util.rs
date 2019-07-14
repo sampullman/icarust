@@ -1,10 +1,13 @@
 
 use rand;
 use std;
-use ggez::graphics::{Point2, Vector2};
+use na;
 use ggez::{graphics, Context};
 use crate::render::camera::{Camera};
 use crate::assets::Asset;
+
+pub type Point2 = na::Point2<f32>;
+pub type Vector2 = na::Vector2<f32>;
 
 /// Create a unit vector representing the given angle (in radians)
 pub fn vec_from_angle(angle: f32) -> Vector2 {
@@ -34,16 +37,14 @@ pub fn clamp_velocity(velocity: Vector2, max: f32) -> Option<Vector2> {
 }
 
 pub fn draw_asset(ctx: &mut Context,
-              asset: &Asset,
+              asset: &dyn Asset,
               position: Point2,
               facing: f32,
               camera: &Camera) {
 
-    let drawparams = graphics::DrawParam {
-        dest: position,
-        rotation: facing,
-        offset: graphics::Point2::new(0.5, 0.5),
-        ..Default::default()
-    };
+    let drawparams = graphics::DrawParam::new()
+        .dest(position)
+        .rotation(facing)
+        .offset(Point2::new(0.5, 0.5));
     asset.drawable().draw_ex_camera(camera, ctx, drawparams, asset.is_static()).unwrap()
 }

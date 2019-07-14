@@ -1,5 +1,5 @@
 use ggez::Context;
-use ggez::graphics::{Point2, Vector2};
+use crate::util::{Point2, Vector2};
 use rand;
 use std;
 use crate::actors::{Actor, BaseActor, Collidable, Drawable, Updatable};

@@ -1,13 +1,14 @@
 //! A Sopwith/Luftrauser style shoot 'em up
 
 #[macro_use] extern crate icarust_derive;
+use ggez;
 use ggez::event::*;
-use ggez::{conf, Context, GameResult, graphics, timer};
+use ggez::{conf, Context, filesystem, GameResult, graphics, timer};
 
 use std::env;
 use std::path;
 
-use ggez::graphics::{Point2};
+use crate::util::{Point2};
 
 mod actors;
 use crate::actors::*;
@@ -65,8 +66,8 @@ struct MainState {
 
 impl MainState {
     fn new(ctx: &mut Context) -> GameResult<MainState> {
-        ctx.print_resource_stats();
-        graphics::set_background_color(ctx, (0, 0, 0, 255).into());
+        filesystem::print_all(ctx);
+        graphics::clear(ctx, graphics::BLACK);
 
         println!("Game resource path: {:?}", ctx.filesystem);
 
@@ -74,20 +75,20 @@ impl MainState {
 
         let mut am = AssetManager::new();
 
-        let screen_width = ctx.conf.window_mode.width;
-        let screen_height = ctx.conf.window_mode.height;
+        let screen_width = ctx.conf.window_mode.width as u32;
+        let screen_height = ctx.conf.window_mode.height as u32;
 
         let player = create_player(ctx, &mut am, screen_width as f32, screen_height as f32);
         let rock_count = 5;
         let rocks = create_rocks(ctx, &mut am, rock_count, player.position(), 100.0, 250.0);
 
-        let debug_text = TextWidget::new(ctx, &mut am, 16)?;
-        let score_text = TextWidget::new(ctx, &mut am, 16)?;
-        let level_text = TextWidget::new(ctx, &mut am, 16)?;
+        let debug_text = TextWidget::new(ctx, &mut am, 16.0)?;
+        let score_text = TextWidget::new(ctx, &mut am, 16.0)?;
+        let level_text = TextWidget::new(ctx, &mut am, 16.0)?;
 
         let hit_sound_id = am.add_sound(ctx, "/boom.ogg");
 
-        let mut world = physics::new_world(rock_count);
+        let mut world = physics::new_world(ctx, rock_count);
         let player_group_id = world.make_group();
         let rock_group_id = world.make_group();
         let shot_group_id = world.make_group();
@@ -98,7 +99,7 @@ impl MainState {
 
         let view_width = WINDOW_WIDTH as f32;
         let view_height = WINDOW_HEIGHT as f32;
-        let camera = Camera::new(screen_width, screen_height, view_width, view_height);
+        let camera = Camera::new(screen_width as u32, screen_height, view_width, view_height);
 
         let s = MainState {
             asset_manager: am,
@@ -156,16 +157,16 @@ impl MainState {
         let am = &mut self.asset_manager;
 
         //self.debug_text.set_text(format!("{:.1}, {:.1}", self.player.x(), self.player.y()));
-        self.score_text.set_text(ctx, am, &format!("Score: {}", self.score));
-        self.level_text.set_text(ctx, am, &format!("Level: {}", self.level));
+        self.score_text.set_text(ctx, am, &format!("Score: {}", self.score), 18.0);
+        self.level_text.set_text(ctx, am, &format!("Level: {}", self.level), 18.0);
 
         // Set TextWidget positions
         //let debug_disp = Point2::new((self.screen_width - ((self.debug_text.width() + 20) / 2)) as f32,
         //                             (self.screen_height - (self.debug_text.height() + 5)) as f32);
-        let level_pos = Point2::new(self.level_text.half_width() + 10.0, 10.0);
+        let level_pos = Point2::new(self.level_text.half_width(ctx) + 10.0, 10.0);
         self.level_text.set_position(level_pos);
 
-        let score_pos = Point2::new(self.level_text.width() as f32 + self.score_text.half_width() + 25.0, 10.0);
+        let score_pos = Point2::new(self.level_text.width(ctx) as f32 + self.score_text.half_width(ctx) + 25.0, 10.0);
         self.score_text.set_position(score_pos);
     }
 }
@@ -218,7 +219,7 @@ impl EventHandler for MainState {
 
             // Check for our end state.
             if self.input.quit {
-                ctx.quit().unwrap();
+                ggez::quit(ctx);
                 break
             } else if !self.player.alive() {
             
@@ -233,7 +234,7 @@ impl EventHandler for MainState {
     fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
 
         // Clear the screen
-        graphics::clear(ctx);
+        graphics::clear(ctx, graphics::BLACK);
         {
             self.player.draw(ctx, &self.camera);
             self.shots.iter().for_each(|s| s.draw(ctx, &self.camera));
@@ -241,7 +242,7 @@ impl EventHandler for MainState {
         }
         let p1 = self.camera.world_to_screen_coords(Point2::new(-WORLD_WIDTH, 32.0));
         let p2 = self.camera.world_to_screen_coords(Point2::new(WORLD_WIDTH, 32.0));
-        let _ = graphics::line(ctx, &[p1, p2], 2.0);
+        let _ = graphics::Mesh::new_line(ctx, &[p1, p2], 2.0, graphics::WHITE);
 
         self.debug_text.draw(ctx, &self.camera);
         self.level_text.draw(ctx, &self.camera);
@@ -260,12 +261,12 @@ impl EventHandler for MainState {
         Ok(())
     }
 
-    fn key_down_event(&mut self, _ctx: &mut Context, keycode: Keycode, _keymod: Mod, _repeat: bool) {
+    fn key_down_event(&mut self, _ctx: &mut Context, keycode: KeyCode, _keymod: KeyMods, _repeat: bool) {
 
         self.input.handle_key_down(keycode, _keymod)
     }
 
-    fn key_up_event(&mut self, _ctx: &mut Context, keycode: Keycode, _keymod: Mod, _repeat: bool) {
+    fn key_up_event(&mut self, _ctx: &mut Context, keycode: KeyCode, _keymod: KeyMods, _repeat: bool) {
 
         self.input.handle_key_up(keycode, _keymod)
     }
