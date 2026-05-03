@@ -28,11 +28,11 @@ impl Updatable for Shot {
         &mut self,
         _ctx: &mut Context,
         _asset_manager: &mut AssetManager,
-        world_coords: (u32, u32),
+        world_coords: (f32, f32),
         dt: f32,
     ) {
         actors::update_actor_position(self, dt);
-        actors::wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32);
+        actors::wrap_actor_position(self, world_coords.0, world_coords.1);
         self.time_to_live -= dt;
         if self.time_to_live < 0.0 {
             self.kill();

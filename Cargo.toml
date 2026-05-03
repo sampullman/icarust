@@ -5,5 +5,5 @@ edition = "2021"
 authors = ["Sam Pullman <sampullman@gmail.com>"]
 
 [dependencies]
-ggez = { git = "https://github.com/ggez/ggez", branch = "master" }
+ggez = { git = "https://github.com/ggez/ggez", rev = "f066eec5434628d50791838f668e94972776a1ad" }
 rand = "0.8"

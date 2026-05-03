@@ -27,6 +27,11 @@ impl Camera {
         self.y_limits = Some(limits);
     }
 
+    pub fn set_drawable_size(&mut self, width: f32, height: f32) {
+        self.world_size = Vector2::new(width, height);
+        self.pixels_per_unit = self.world_size / self.view_size;
+    }
+
     pub fn set_x_wrap(&mut self, wrap: bool) {
         self.wrap_x = wrap;
     }

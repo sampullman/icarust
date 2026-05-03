@@ -1,7 +1,6 @@
 use crate::assets::{AssetManager, Sprite};
 use crate::input::InputState;
 use crate::render::camera::Camera;
-use crate::util;
 use crate::util::{Point2, Vector2};
 use ggez::graphics::{Canvas, DrawParam};
 use ggez::Context;
@@ -9,8 +8,6 @@ use ggez::Context;
 pub mod player;
 pub mod rock;
 pub mod shot;
-
-const MAX_PHYSICS_VEL: f32 = 320.0;
 
 #[derive(Debug)]
 pub struct BaseActor {
@@ -72,10 +69,6 @@ pub trait Actor {
     fn bbox_size(&self) -> f32;
 
     fn rvel(&self) -> f32;
-    fn rotate(&mut self) {
-        let rvel = self.rvel();
-        self.add_facing(rvel);
-    }
 
     fn sprite(&self) -> &Sprite;
 }
@@ -150,18 +143,18 @@ impl<T: HasBase> Actor for T {
     }
 }
 
-/// Update position based on current velocity.
+/// Update position based on current velocity, and rotate by `rvel * dt`.
+///
+/// Force/clamping is left to specific actor impls (`Player::update`, etc.).
 pub fn update_actor_position<T: Actor + ?Sized>(actor: &mut T, dt: f32) {
-    if let Some(clamped) = util::clamp_velocity(actor.velocity(), MAX_PHYSICS_VEL) {
-        actor.set_velocity(clamped);
-    }
     let dv = actor.velocity() * dt;
     let new_position = actor.position() + dv;
     actor.set_position(new_position);
-    actor.rotate();
+    let dr = actor.rvel() * dt;
+    actor.add_facing(dr);
 }
 
-/// Wraps an actor's position to the bounds of the world.
+/// Wraps an actor's position toroidally so leaving one edge re-enters the other.
 pub fn wrap_actor_position<T: Actor + ?Sized>(actor: &mut T, wx: f32, wy: f32) {
     let actor_center = actor.position();
     if actor_center.x > wx {
@@ -170,7 +163,7 @@ pub fn wrap_actor_position<T: Actor + ?Sized>(actor: &mut T, wx: f32, wy: f32) {
         actor.add_x(wx);
     }
     if actor_center.y > wy {
-        actor.set_y(wy);
+        actor.add_y(-wy);
     } else if actor_center.y < 0. {
         actor.add_y(wy);
     }
@@ -181,11 +174,11 @@ pub trait Updatable: Actor {
         &mut self,
         _ctx: &mut Context,
         _asset_manager: &mut AssetManager,
-        world_coords: (u32, u32),
+        world_coords: (f32, f32),
         dt: f32,
     ) {
         update_actor_position(self, dt);
-        wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32);
+        wrap_actor_position(self, world_coords.0, world_coords.1);
     }
 }
 

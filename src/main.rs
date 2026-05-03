@@ -35,6 +35,9 @@ pub mod physics;
 const WINDOW_WIDTH: f32 = 1280.0;
 const WINDOW_HEIGHT: f32 = 540.0;
 
+const ROCKS_PER_LEVEL_BASE: i32 = 5;
+const ROCKS_MAX: i32 = 30;
+
 struct MainState {
     asset_manager: AssetManager,
     camera: Camera,
@@ -44,12 +47,12 @@ struct MainState {
     level: i32,
     score: i32,
     hit_sound_id: SoundId,
-    screen_width: u32,
-    screen_height: u32,
     input: InputState,
     gui_dirty: bool,
     score_text: TextWidget,
     level_text: TextWidget,
+    game_over_text: TextWidget,
+    game_over: bool,
 }
 
 impl MainState {
@@ -59,15 +62,12 @@ impl MainState {
         let mut am = AssetManager::new();
 
         let (drawable_w, drawable_h) = ctx.gfx.drawable_size();
-        let screen_width = drawable_w as u32;
-        let screen_height = drawable_h as u32;
 
-        let player = create_player(ctx, &mut am, drawable_w, drawable_h);
-        let rock_count = 5;
+        let player = create_player(ctx, &mut am, WINDOW_WIDTH, WINDOW_HEIGHT);
         let rocks = create_rocks(
             ctx,
             &mut am,
-            rock_count,
+            ROCKS_PER_LEVEL_BASE,
             player.position(),
             100.0,
             250.0,
@@ -75,10 +75,12 @@ impl MainState {
 
         let score_text = TextWidget::new(ctx, &mut am, 18.0)?;
         let level_text = TextWidget::new(ctx, &mut am, 18.0)?;
+        let mut game_over_text = TextWidget::new(ctx, &mut am, 48.0)?;
+        game_over_text.set_text(ctx, &mut am, "GAME OVER — press R", 48.0);
 
         let hit_sound_id = am.add_sound(ctx, "/boom.ogg");
 
-        let camera = Camera::new(screen_width, screen_height, WINDOW_WIDTH, WINDOW_HEIGHT);
+        let camera = Camera::new(drawable_w as u32, drawable_h as u32, WINDOW_WIDTH, WINDOW_HEIGHT);
 
         Ok(MainState {
             asset_manager: am,
@@ -89,13 +91,30 @@ impl MainState {
             level: 0,
             score: 0,
             hit_sound_id,
-            screen_width,
-            screen_height,
             input: InputState::default(),
             gui_dirty: true,
             score_text,
             level_text,
+            game_over_text,
+            game_over: false,
         })
+    }
+
+    fn restart(&mut self, ctx: &mut Context) {
+        self.player = create_player(ctx, &mut self.asset_manager, WINDOW_WIDTH, WINDOW_HEIGHT);
+        self.shots.clear();
+        self.rocks = create_rocks(
+            ctx,
+            &mut self.asset_manager,
+            ROCKS_PER_LEVEL_BASE,
+            self.player.position(),
+            100.0,
+            250.0,
+        );
+        self.level = 0;
+        self.score = 0;
+        self.gui_dirty = true;
+        self.game_over = false;
     }
 
     fn clear_dead_stuff(&mut self) {
@@ -103,18 +122,25 @@ impl MainState {
         self.rocks.retain(|r| r.alive());
     }
 
-    fn handle_collisions(&mut self) {
+    fn handle_collisions(&mut self, ctx: &Context) {
         for rock in &mut self.rocks {
+            if !rock.alive() {
+                continue;
+            }
             if physics::collides(&self.player, rock) {
                 self.player.kill();
             }
             for shot in &mut self.shots {
+                if !shot.alive() {
+                    continue;
+                }
                 if physics::collides(shot, rock) {
                     shot.kill();
                     rock.kill();
                     self.score += 1;
                     self.gui_dirty = true;
-                    self.asset_manager.play_sound(self.hit_sound_id);
+                    self.asset_manager.play_sound(ctx, self.hit_sound_id);
+                    break;
                 }
             }
         }
@@ -124,10 +150,11 @@ impl MainState {
         if self.rocks.is_empty() {
             self.level += 1;
             self.gui_dirty = true;
+            let count = (self.level + ROCKS_PER_LEVEL_BASE).min(ROCKS_MAX);
             let r = create_rocks(
                 ctx,
                 &mut self.asset_manager,
-                self.level + 5,
+                count,
                 self.player.position(),
                 100.0,
                 250.0,
@@ -152,6 +179,13 @@ impl MainState {
             10.0,
         );
         self.score_text.set_position(score_pos);
+
+        let go_pos = Point2::new(
+            (WINDOW_WIDTH - self.game_over_text.width(ctx)) / 2.0
+                + self.game_over_text.half_width(ctx),
+            WINDOW_HEIGHT / 2.0 - self.game_over_text.half_height(ctx),
+        );
+        self.game_over_text.set_position(go_pos);
     }
 }
 
@@ -161,7 +195,19 @@ impl EventHandler for MainState {
 
         while ctx.time.check_update_time(DESIRED_FPS) {
             let seconds = 1.0 / (DESIRED_FPS as f32);
-            let coords = (self.screen_width, self.screen_height);
+            let coords = (WINDOW_WIDTH, WINDOW_HEIGHT);
+
+            if self.game_over {
+                if self.input.restart {
+                    self.input.restart = false;
+                    self.restart(ctx);
+                }
+                if self.input.quit {
+                    ctx.request_quit();
+                    break;
+                }
+                continue;
+            }
 
             {
                 let am = &mut self.asset_manager;
@@ -184,9 +230,15 @@ impl EventHandler for MainState {
 
             self.camera.move_to(self.player.position());
 
-            self.handle_collisions();
+            self.handle_collisions(ctx);
             self.clear_dead_stuff();
-            self.check_for_level_respawn(ctx);
+
+            if !self.player.alive() {
+                self.game_over = true;
+                self.gui_dirty = true;
+            } else {
+                self.check_for_level_respawn(ctx);
+            }
 
             if self.gui_dirty {
                 self.update_ui(ctx);
@@ -205,7 +257,9 @@ impl EventHandler for MainState {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
 
-        draw_actor_wrapped(&mut canvas, &self.camera, &self.player);
+        if self.player.alive() {
+            draw_actor_wrapped(&mut canvas, &self.camera, &self.player);
+        }
         for shot in &self.shots {
             draw_actor(&mut canvas, &self.camera, shot);
         }
@@ -215,6 +269,9 @@ impl EventHandler for MainState {
 
         self.level_text.draw(&mut canvas, &self.camera);
         self.score_text.draw(&mut canvas, &self.camera);
+        if self.game_over {
+            self.game_over_text.draw(&mut canvas, &self.camera);
+        }
 
         canvas.finish(ctx)?;
         ggez::timer::yield_now();
@@ -233,6 +290,11 @@ impl EventHandler for MainState {
 
     fn key_up_event(&mut self, _ctx: &mut Context, input: KeyInput) -> GameResult {
         self.input.handle_key_up(input);
+        Ok(())
+    }
+
+    fn resize_event(&mut self, _ctx: &mut Context, width: f32, height: f32) -> GameResult {
+        self.camera.set_drawable_size(width, height);
         Ok(())
     }
 }

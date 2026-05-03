@@ -1,4 +1,4 @@
-use ggez::audio::{self, SoundSource};
+use ggez::audio::{self, SoundData, SoundSource};
 use ggez::graphics::{self, FontData, Image};
 use ggez::{Context, GameResult};
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ const DEFAULT_FONT_PATH: &str = "/DejaVuSerif.ttf";
 
 pub struct AssetManager {
     image_cache: HashMap<String, Image>,
-    sound_cache: Vec<audio::Source>,
+    sound_cache: Vec<SoundData>,
     fonts_loaded: bool,
 }
 
@@ -24,13 +24,18 @@ impl AssetManager {
     }
 
     pub fn add_sound(&mut self, ctx: &mut Context, path: &str) -> SoundId {
-        self.sound_cache
-            .push(audio::Source::new(ctx, path).expect("failed to load sound"));
+        let data = SoundData::new(ctx, path).expect("failed to load sound");
+        self.sound_cache.push(data);
         self.sound_cache.len() - 1
     }
 
-    pub fn play_sound(&self, id: SoundId) {
-        self.sound_cache[id].play();
+    /// Plays a one-shot copy of the sound. Allows overlap (e.g. rapid shots).
+    pub fn play_sound(&self, ctx: &Context, id: SoundId) {
+        let data = self.sound_cache[id].clone();
+        match audio::Source::from_data(ctx, data) {
+            Ok(source) => source.play_detached(),
+            Err(e) => eprintln!("failed to start sound {id}: {e}"),
+        }
     }
 
     pub fn get_image(&mut self, ctx: &mut Context, file: &str) -> Image {
