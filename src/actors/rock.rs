@@ -1,46 +1,53 @@
-use ggez::Context;
-use crate::util::{Point2, Vector2};
-use rand;
-use std;
-use crate::actors::{Actor, BaseActor, Collidable, Drawable, Updatable};
-use crate::physics::{CollisionWorld2, PhysicsId};
-use crate::render::camera::Camera;
-
-use crate::assets::{Sprite, Asset, AssetManager};
+use crate::actors::{BaseActor, HasBase, Updatable};
+use crate::assets::AssetManager;
 use crate::util;
+use crate::util::{Point2, Vector2};
+use ggez::Context;
 
 const MAX_ROCK_VEL: f32 = 50.0;
-
 const ROCK_BBOX: f32 = 12.0;
 
-#[derive(Debug, Actor, Drawable)]
+#[derive(Debug)]
 pub struct Rock {
-	pub base: BaseActor<Sprite>,
+    pub base: BaseActor,
 }
 
-impl Collidable for Rock {}
+impl HasBase for Rock {
+    fn base(&self) -> &BaseActor {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut BaseActor {
+        &mut self.base
+    }
+}
+
 impl Updatable for Rock {}
 
 pub fn create_rock(ctx: &mut Context, asset_manager: &mut AssetManager) -> Rock {
     Rock {
-		base: BaseActor {
-            asset: asset_manager.make_sprite(ctx, "/rock.png"),            
-        	pos: Point2::origin(),
-        	facing: 0.,
-        	velocity: Vector2::new(0.0, 0.0),
-        	bbox_size: ROCK_BBOX,
+        base: BaseActor {
+            asset: asset_manager.make_sprite(ctx, "/rock.png"),
+            pos: Point2::ZERO,
+            facing: 0.,
+            velocity: Vector2::ZERO,
+            bbox_size: ROCK_BBOX,
             rvel: 0.,
             alive: true,
-            physics_id: asset_manager.next_physics_id(),
-		},
+        },
     }
 }
 
-/// Create the `num` rocks.
-/// Ensures none of them are within the exclusion zone (nominally the player)
-/// This *could* create rocks outside the world bounds, so it should be
-/// called before `wrap_actor_position()`
-pub fn create_rocks(ctx: &mut Context, asset_manager: &mut AssetManager, num: i32, exclusion: Point2, min_radius: f32, max_radius: f32) -> Vec<Rock> {
+/// Create `num` rocks. Ensures none are within the exclusion zone (typically the player).
+/// Rocks may spawn outside world bounds, so call before `wrap_actor_position`.
+pub fn create_rocks(
+    ctx: &mut Context,
+    asset_manager: &mut AssetManager,
+    num: i32,
+    exclusion: Point2,
+    min_radius: f32,
+    max_radius: f32,
+) -> Vec<Rock> {
+    use crate::actors::Actor;
     assert!(max_radius > min_radius);
     let new_rock = |_| {
         let mut rock = create_rock(ctx, asset_manager);

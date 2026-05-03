@@ -1,47 +1,61 @@
-use crate::assets::{Asset, AssetManager, Text};
-use crate::actors::Drawable;
+use crate::assets::{AssetManager, TextAsset};
 use crate::render::camera::Camera;
+use crate::util::Point2;
+use ggez::graphics::{Canvas, Color, DrawParam};
 use ggez::{Context, GameResult};
-use crate::util::{Point2};
 
-#[derive(Debug)]
-struct BaseWidget<T: Asset> {
-    pub asset: T,
-    pub pos: Point2,
-    pub facing: f32,
-}
-
-pub trait Widget {
-
-    fn position(&self) -> Point2;
-    fn set_position(&mut self, pos: Point2);
-    fn facing(&self) -> f32;
-    fn set_facing(&mut self, facing: f32);
-    fn width(&self, ctx: &mut Context) -> u32;
-    fn height(&self, ctx: &mut Context) -> u32;
-    fn half_width(&self, ctx: &mut Context) -> f32;
-    fn half_height(&self, ctx: &mut Context) -> f32;
-}
-
-#[derive(Debug, Widget, Drawable)]
 pub struct TextWidget {
-    base: BaseWidget<Text>
+    pub asset: TextAsset,
+    pub pos: Point2,
+    pub size: f32,
 }
 
 impl TextWidget {
-
     pub fn new(ctx: &mut Context, am: &mut AssetManager, font_size: f32) -> GameResult<TextWidget> {
+        let font = am.ensure_default_font(ctx)?;
         Ok(TextWidget {
-            base: BaseWidget {
-                asset: am.make_text(ctx, "", "/DejaVuSerif.ttf", font_size)?,
-                pos: Point2::origin(),
-                facing: 0.0,
-            }
+            asset: TextAsset::new(font, "", font_size),
+            pos: Point2::ZERO,
+            size: font_size,
         })
     }
 
-    pub fn set_text(&mut self, ctx: &mut Context, am: &mut AssetManager, text: &str, size: f32) {
-        am.update_text(ctx, &mut self.base.asset, text, size)
+    pub fn set_text(
+        &mut self,
+        _ctx: &mut Context,
+        _am: &mut AssetManager,
+        text: &str,
+        size: f32,
+    ) {
+        self.asset.set_text(text, size);
+        self.size = size;
     }
 
+    pub fn set_position(&mut self, pos: Point2) {
+        self.pos = pos;
+    }
+
+    pub fn width(&self, ctx: &Context) -> f32 {
+        self.asset.measure(ctx).0
+    }
+
+    pub fn height(&self, ctx: &Context) -> f32 {
+        self.asset.measure(ctx).1
+    }
+
+    pub fn half_width(&self, ctx: &Context) -> f32 {
+        self.width(ctx) / 2.0
+    }
+
+    pub fn half_height(&self, ctx: &Context) -> f32 {
+        self.height(ctx) / 2.0
+    }
+
+    pub fn draw(&self, canvas: &mut Canvas, camera: &Camera) {
+        let screen_pos = camera.static_world_to_screen_coords(self.pos);
+        canvas.draw(
+            &self.asset.text,
+            DrawParam::new().dest(screen_pos).color(Color::WHITE),
+        );
+    }
 }

@@ -1,17 +1,9 @@
 [package]
 name = "icarust"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 authors = ["Sam Pullman <sampullman@gmail.com>"]
 
-[dependencies.ggez]
-path = "../libraries/ggez"
-
-[dependencies.icarust-derive]
-path = "../icarust-derive/"
-
 [dependencies]
-rand = "0.6"
-na = { package = "nalgebra", version = "0.18", features = ["mint"] }
-mint = "0.5"
-ncollide2d = "0.19"
+ggez = { git = "https://github.com/ggez/ggez", branch = "master" }
+rand = "0.8"

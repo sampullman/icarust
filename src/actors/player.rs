@@ -1,55 +1,61 @@
-
-use ggez::Context;
-use crate::input::InputState;
-use crate::assets::{Asset, AssetManager, SoundId, Sprite};
 use crate::actors;
-use crate::actors::{Actor, BaseActor, Collidable, Drawable, Inputable, Updatable};
+use crate::actors::{Actor, BaseActor, HasBase, Inputable, Updatable};
+use crate::assets::{AssetManager, SoundId};
 use crate::actors::shot::{create_shot, Shot};
-use crate::physics::{CollisionWorld2, PhysicsId};
-use crate::render::camera::Camera;
+use crate::input::InputState;
 use crate::util;
 use crate::util::{Point2, Vector2};
+use ggez::Context;
 
 const PLAYER_BBOX: f32 = 12.0;
-
 const PLAYER_THRUST: f32 = 540.0;
 const PLAYER_MAX_SPEED: f32 = 220.0;
 const PLAYER_GRAVITY: f32 = 110.0;
-// Rotation in radians per second.
+/// Rotation in radians per second.
 const PLAYER_TURN_RATE: f32 = 3.0;
 
-// Seconds between shots
+/// Seconds between shots.
 const PLAYER_SHOT_TIME: f32 = 0.3;
 const SHOT_SPEED: f32 = 340.0;
 
-#[derive(Debug, Actor, WrappedDrawable)]
+#[derive(Debug)]
 pub struct Player {
-	pub base: BaseActor<Sprite>,
+    pub base: BaseActor,
     shot_timeout: f32,
     shot_sound_id: SoundId,
 }
 
-impl Collidable for Player {}
+impl HasBase for Player {
+    fn base(&self) -> &BaseActor {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut BaseActor {
+        &mut self.base
+    }
+}
 
-pub fn create_player(ctx: &mut Context, asset_manager: &mut AssetManager, screen_width: f32, screen_height: f32) -> Player {
+pub fn create_player(
+    ctx: &mut Context,
+    asset_manager: &mut AssetManager,
+    screen_width: f32,
+    screen_height: f32,
+) -> Player {
     Player {
-		base: BaseActor {
+        base: BaseActor {
             asset: asset_manager.make_sprite(ctx, "/player.png"),
-        	pos: Point2::new(screen_width / 2.0, screen_height / 2.0),
-        	facing: 0.,
-        	velocity: Vector2::new(0.0, 0.0),
-        	bbox_size: PLAYER_BBOX,
+            pos: Point2::new(screen_width / 2.0, screen_height / 2.0),
+            facing: 0.,
+            velocity: Vector2::ZERO,
+            bbox_size: PLAYER_BBOX,
             rvel: 0.,
             alive: true,
-            physics_id: asset_manager.next_physics_id(),
-		},
+        },
         shot_timeout: 0.0,
         shot_sound_id: asset_manager.add_sound(ctx, "/pew.ogg"),
     }
 }
 
 impl Inputable for Player {
-
     fn handle_input(&mut self, input: &InputState, dt: f32) {
         self.add_facing(dt * PLAYER_TURN_RATE * input.xaxis);
 
@@ -60,11 +66,16 @@ impl Inputable for Player {
 }
 
 impl Updatable for Player {
-
-    fn update(&mut self, _ctx: &mut Context, _asset_manager: &mut AssetManager, world_coords: (u32, u32), dt: f32) {
+    fn update(
+        &mut self,
+        _ctx: &mut Context,
+        _asset_manager: &mut AssetManager,
+        world_coords: (u32, u32),
+        dt: f32,
+    ) {
         actors::update_actor_position(self, dt);
         actors::wrap_actor_position(self, world_coords.0 as f32, world_coords.1 as f32);
-        
+
         self.shot_timeout -= dt;
 
         let direction_vector = util::vec_from_angle(self.facing());
@@ -78,13 +89,11 @@ impl Updatable for Player {
 }
 
 impl Player {
-
     pub fn can_fire(&self) -> bool {
         self.shot_timeout < 0.0
     }
 
     pub fn fire_shot(&mut self, ctx: &mut Context, am: &mut AssetManager) -> Shot {
-
         self.shot_timeout = PLAYER_SHOT_TIME;
 
         let mut shot = create_shot(ctx, am);
@@ -92,18 +101,18 @@ impl Player {
         shot.set_facing(self.facing());
         let direction = util::vec_from_angle(shot.facing());
 
-		shot.set_velocity(direction * SHOT_SPEED);
+        shot.set_velocity(direction * SHOT_SPEED);
 
         let pos = direction * self.half_height();
         shot.set_position(self.position() + pos);
 
-        let _ = am.get_sound(self.shot_sound_id).play();
+        am.play_sound(self.shot_sound_id);
         shot
     }
 }
 
 fn player_thrust<T: Actor>(actor: &mut T, dt: f32) {
     let direction_vector = util::vec_from_angle(actor.facing());
-    let thrust_vector = direction_vector * (PLAYER_THRUST);
-    actor.add_velocity(thrust_vector * (dt));
+    let thrust_vector = direction_vector * PLAYER_THRUST;
+    actor.add_velocity(thrust_vector * dt);
 }

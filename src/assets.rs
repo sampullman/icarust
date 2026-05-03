@@ -1,140 +1,105 @@
-
-use ggez::{audio, Context, GameResult, graphics};
-use ggez::graphics::{Image, Font};
-use ncollide2d::world::CollisionObjectHandle;
-use crate::render::camera::{CameraDraw};
+use ggez::audio::{self, SoundSource};
+use ggez::graphics::{self, FontData, Image};
+use ggez::{Context, GameResult};
 use std::collections::HashMap;
-use std::rc::Rc;
 
 pub type SoundId = usize;
 
+const DEFAULT_FONT: &str = "DejaVuSerif";
+const DEFAULT_FONT_PATH: &str = "/DejaVuSerif.ttf";
+
 pub struct AssetManager {
-    image_cache: HashMap<String, Rc<Image>>,
-    font_cache: HashMap<String, Font>,
-    sound_cache: Vec<Rc<audio::Source>>,
-    id_gen: usize,
+    image_cache: HashMap<String, Image>,
+    sound_cache: Vec<audio::Source>,
+    fonts_loaded: bool,
 }
 
 impl AssetManager {
-
     pub fn new() -> Self {
         AssetManager {
             image_cache: HashMap::new(),
-            font_cache: HashMap::new(),
             sound_cache: Vec::new(),
-            id_gen: 0,
+            fonts_loaded: false,
         }
-    }
-
-    pub fn next_physics_id(&mut self) -> CollisionObjectHandle {
-        self.id_gen += 1;
-        CollisionObjectHandle(self.id_gen)
     }
 
     pub fn add_sound(&mut self, ctx: &mut Context, path: &str) -> SoundId {
-        self.sound_cache.push(Rc::new(audio::Source::new(ctx, path).unwrap()));
+        self.sound_cache
+            .push(audio::Source::new(ctx, path).expect("failed to load sound"));
         self.sound_cache.len() - 1
     }
 
-    pub fn get_sound(&self, id: SoundId) -> Rc<audio::Source> {
-        self.sound_cache[id].clone()
+    pub fn play_sound(&self, id: SoundId) {
+        self.sound_cache[id].play();
     }
 
-    pub fn get_image(&mut self, ctx: &mut Context, file: &str) -> Rc<Image> {
-        {
-            if let Some(image) = self.image_cache.get(file) {
-                return image.clone()
-            }
+    pub fn get_image(&mut self, ctx: &mut Context, file: &str) -> Image {
+        if let Some(image) = self.image_cache.get(file) {
+            return image.clone();
         }
-
-        let new_image = Rc::new(Image::new(ctx, file).unwrap());
+        let new_image = Image::from_path(ctx, file).expect("failed to load image");
         self.image_cache.insert(file.to_string(), new_image.clone());
         new_image
     }
 
     pub fn make_sprite(&mut self, ctx: &mut Context, file: &str) -> Sprite {
-        Sprite { image: self.get_image(ctx, file) }
-    }
-
-    pub fn get_font(&mut self, ctx: &mut Context, key: &str) -> GameResult<Font> {
-        {
-            if let Some(font) = self.font_cache.get(key) {
-                return Ok(font.clone())
-            }
+        Sprite {
+            image: self.get_image(ctx, file),
         }
-
-        let new_font = Font::new(ctx, "/DejaVuSerif.ttf")?;
-        self.font_cache.insert(key.to_string(), new_font.clone());
-        Ok(new_font.clone())
     }
 
-    pub fn make_text(&mut self, ctx: &mut Context, text: &str, file: &str, size: f32) -> GameResult<Text> {
-
-        let key = format!("{}", file);
-        let font = self.get_font(ctx, &key)?;
-        Ok(Text { text: graphics::Text::new((text, font, size)), font_key: key })
-    }
-
-    pub fn update_text(&mut self, ctx: &mut Context, text: &mut Text, new_str: &str, size: f32) {
-        let font = self.get_font(ctx, &text.font_key).unwrap();
-        text.text = graphics::Text::new((new_str, font, size))
+    pub fn ensure_default_font(&mut self, ctx: &mut Context) -> GameResult<&'static str> {
+        if !self.fonts_loaded {
+            let font = FontData::from_path(ctx, DEFAULT_FONT_PATH)?;
+            ctx.gfx.add_font(DEFAULT_FONT, font);
+            self.fonts_loaded = true;
+        }
+        Ok(DEFAULT_FONT)
     }
 }
 
-pub trait Asset {
-    fn drawable(&self) -> &dyn CameraDraw;
-
-    fn width(&self, ctx: &mut Context) -> u32;
-    fn height(&self, ctx: &mut Context) -> u32;
-
-    fn half_width(&self, ctx: &mut Context) -> f32 {
-        (self.width(ctx) as f32) / 2.0
-    }
-    fn half_height(&self, ctx: &mut Context) -> f32 {
-        (self.height(ctx) as f32) / 2.0
-    }
-    fn is_static(&self) -> bool {
-        false
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sprite {
-    image: Rc<Image>,
+    pub image: Image,
 }
 
-impl Asset for Sprite {
-
-    fn drawable(&self) -> &dyn CameraDraw {
-        &*self.image
+impl Sprite {
+    pub fn width(&self) -> f32 {
+        self.image.width() as f32
     }
-    
-    fn width(&self, ctx: &mut Context) -> u32 {
-        self.image.width().into()
+    pub fn height(&self) -> f32 {
+        self.image.height() as f32
     }
-    fn height(&self, ctx: &mut Context) -> u32 {
-        self.image.height().into()
+    pub fn half_width(&self) -> f32 {
+        self.width() / 2.0
+    }
+    pub fn half_height(&self) -> f32 {
+        self.height() / 2.0
     }
 }
 
-#[derive(Debug)]
-pub struct Text {
+pub struct TextAsset {
     pub text: graphics::Text,
-    pub font_key: String,
 }
 
-impl Asset for Text {
+impl TextAsset {
+    pub fn new(font: &str, contents: &str, size: f32) -> Self {
+        let mut text = graphics::Text::new(contents);
+        text.set_font(font).set_scale(size);
+        TextAsset { text }
+    }
 
-    fn drawable(&self) -> &dyn CameraDraw {
-        &self.text
+    pub fn set_text(&mut self, contents: &str, size: f32) {
+        self.text.clear();
+        self.text.add(contents);
+        self.text.set_scale(size);
     }
-    fn is_static(&self) -> bool {
-        true
-    }
-    fn width(&self, ctx: &mut Context) -> u32 {
-        self.text.width(ctx)
-    }
-    fn height(&self, ctx: &mut Context) -> u32 {
-        self.text.height(ctx)
+
+    pub fn measure(&self, ctx: &Context) -> (f32, f32) {
+        let bounds = self
+            .text
+            .measure(ctx)
+            .unwrap_or(ggez::glam::Vec2::splat(1.0).into());
+        (bounds.x, bounds.y)
     }
 }
