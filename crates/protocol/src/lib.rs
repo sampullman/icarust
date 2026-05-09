@@ -1,0 +1,93 @@
+//! Wire protocol between Icarust client and server.
+//!
+//! Encodes with `postcard` (compact, no_std-friendly). Messages are framed
+//! as binary WebSocket frames; each frame holds exactly one
+//! [`ClientMsg`] or [`ServerMsg`].
+
+use serde::{Deserialize, Serialize};
+use sim::entity::{EntityId, EntityKind, PlayerId, Tick};
+use sim::util::WireVec2;
+use sim::{GameEvent, PlayerInput};
+
+/// Default WebSocket address the server listens on and the client connects
+/// to. Override with `ICARUST_SERVER` or a CLI flag in the client.
+pub const DEFAULT_ADDR: &str = "127.0.0.1:6363";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ClientMsg {
+    Hello { name: String },
+    Input { tick: Tick, input: PlayerInput },
+    Bye,
+    /// Ask the server to put the player back in the world after dying.
+    Respawn,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ServerMsg {
+    Welcome {
+        player_id: PlayerId,
+        seed: u64,
+        world_size: WireVec2,
+        snapshot: Snapshot,
+    },
+    Snapshot(Snapshot),
+    Events {
+        tick: Tick,
+        events: Vec<GameEvent>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub tick: Tick,
+    pub entities: Vec<EntityState>,
+    pub score_by_player: Vec<(PlayerId, i32)>,
+    pub level: i32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct EntityState {
+    pub id: EntityId,
+    pub kind: EntityKind,
+    pub pos: WireVec2,
+    pub vel: WireVec2,
+    pub facing: f32,
+    pub alive: bool,
+}
+
+impl EntityState {
+    pub fn from_entity(e: &sim::Entity) -> Self {
+        EntityState {
+            id: e.id,
+            kind: e.kind,
+            pos: e.pos.into(),
+            vel: e.vel.into(),
+            facing: e.facing,
+            alive: e.alive,
+        }
+    }
+}
+
+pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {
+    postcard::to_allocvec(msg).expect("postcard encode")
+}
+
+pub fn decode<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T, postcard::Error> {
+    postcard::from_bytes(bytes)
+}
+
+/// Build a `Snapshot` from a `sim::World`. Server convenience.
+pub fn snapshot_from_world(world: &sim::World) -> Snapshot {
+    let entities = world
+        .entities()
+        .filter(|e| e.alive)
+        .map(EntityState::from_entity)
+        .collect();
+    let score_by_player = world.scores().iter().map(|(p, s)| (*p, *s)).collect();
+    Snapshot {
+        tick: world.tick_index(),
+        entities,
+        score_by_player,
+        level: world.level(),
+    }
+}

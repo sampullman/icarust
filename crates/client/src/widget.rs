@@ -1,9 +1,9 @@
 use crate::assets::{AssetManager, TextAsset};
-use crate::render::camera::Camera;
-use crate::util::Point2;
+use crate::render::camera::Point2;
 use ggez::graphics::{Canvas, Color, DrawParam};
 use ggez::{Context, GameResult};
 
+/// HUD text positioned in screen-pixel coordinates.
 pub struct TextWidget {
     pub asset: TextAsset,
     pub pos: Point2,
@@ -11,8 +11,8 @@ pub struct TextWidget {
 }
 
 impl TextWidget {
-    pub fn new(ctx: &mut Context, am: &mut AssetManager, font_size: f32) -> GameResult<TextWidget> {
-        let font = am.ensure_default_font(ctx)?;
+    pub fn new(_ctx: &mut Context, am: &mut AssetManager, font_size: f32) -> GameResult<TextWidget> {
+        let font = am.ensure_default_font(_ctx)?;
         Ok(TextWidget {
             asset: TextAsset::new(font, "", font_size),
             pos: Point2::ZERO,
@@ -20,13 +20,7 @@ impl TextWidget {
         })
     }
 
-    pub fn set_text(
-        &mut self,
-        _ctx: &mut Context,
-        _am: &mut AssetManager,
-        text: &str,
-        size: f32,
-    ) {
+    pub fn set_text(&mut self, text: &str, size: f32) {
         self.asset.set_text(text, size);
         self.size = size;
     }
@@ -43,19 +37,10 @@ impl TextWidget {
         self.asset.measure(ctx).1
     }
 
-    pub fn half_width(&self, ctx: &Context) -> f32 {
-        self.width(ctx) / 2.0
-    }
-
-    pub fn half_height(&self, ctx: &Context) -> f32 {
-        self.height(ctx) / 2.0
-    }
-
-    pub fn draw(&self, canvas: &mut Canvas, camera: &Camera) {
-        let screen_pos = camera.static_world_to_screen_coords(self.pos);
+    pub fn draw(&self, canvas: &mut Canvas) {
         canvas.draw(
             &self.asset.text,
-            DrawParam::new().dest(screen_pos).color(Color::WHITE),
+            DrawParam::new().dest(self.pos).color(Color::WHITE),
         );
     }
 }

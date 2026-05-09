@@ -1,0 +1,11 @@
+[package]
+name = "sim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+glam = { workspace = true, features = ["serde"] }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+serde = { workspace = true }

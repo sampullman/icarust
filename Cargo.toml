@@ -1,9 +1,25 @@
-[package]
-name = "icarust"
+[workspace]
+resolver = "2"
+members = ["crates/sim", "crates/protocol", "crates/server", "crates/client"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 authors = ["Sam Pullman <sampullman@gmail.com>"]
 
-[dependencies]
+[workspace.dependencies]
+glam = "0.32"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
+rand = { version = "0.8", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 ggez = { git = "https://github.com/ggez/ggez", rev = "f066eec5434628d50791838f668e94972776a1ad" }
-rand = "0.8"
+sim = { path = "crates/sim" }
+protocol = { path = "crates/protocol" }
