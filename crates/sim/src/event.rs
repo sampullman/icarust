@@ -1,4 +1,4 @@
-use crate::entity::PlayerId;
+use crate::entity::{PlayerId, ShotOwner};
 use crate::util::Vec2;
 use serde::{Deserialize, Serialize};
 
@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 pub enum GameEvent {
     PlayerJoined(PlayerId),
     PlayerLeft(PlayerId),
-    ShotFired { owner: PlayerId, pos: Vec2 },
+    ShotFired { owner: ShotOwner, pos: Vec2 },
     RockKilled { pos: Vec2, killer: PlayerId },
+    EnemyKilled { pos: Vec2, killer: PlayerId },
     PlayerKilled(PlayerId),
     LevelUp(i32),
 }

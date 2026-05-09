@@ -15,6 +15,9 @@ use protocol::{ClientMsg, EntityState, ServerMsg, Snapshot};
 use sim::entity::EntityKind;
 use sim::{GameEvent, PlayerId, Tick};
 
+const ENEMY_TINT: Color = Color::new(0.95, 0.30, 0.30, 1.0);
+const ENEMY_SHOT_TINT: Color = Color::new(1.0, 0.45, 0.20, 1.0);
+
 pub mod assets;
 pub mod input;
 pub mod net;
@@ -47,11 +50,17 @@ struct Sprites {
 }
 
 impl Sprites {
-    fn for_kind(&self, kind: &EntityKind) -> &Sprite {
+    /// Pick the sprite + tint to draw for a given entity kind. Enemies
+    /// reuse the player sprite tinted red so we don't need a separate
+    /// asset for now.
+    fn for_kind(&self, kind: &EntityKind) -> (&Sprite, Color) {
+        use sim::entity::ShotOwner;
         match kind {
-            EntityKind::Player { .. } => &self.player,
-            EntityKind::Rock => &self.rock,
-            EntityKind::Shot { .. } => &self.shot,
+            EntityKind::Player { .. } => (&self.player, Color::WHITE),
+            EntityKind::Rock => (&self.rock, Color::WHITE),
+            EntityKind::Shot { owner: ShotOwner::Player(_) } => (&self.shot, Color::WHITE),
+            EntityKind::Shot { owner: ShotOwner::Enemy } => (&self.shot, ENEMY_SHOT_TINT),
+            EntityKind::Enemy => (&self.player, ENEMY_TINT),
         }
     }
 }
@@ -163,7 +172,7 @@ impl MainState {
                 GameEvent::ShotFired { .. } => {
                     self.asset_manager.play_sound(ctx, self.shot_sound_id);
                 }
-                GameEvent::RockKilled { .. } => {
+                GameEvent::RockKilled { .. } | GameEvent::EnemyKilled { .. } => {
                     self.asset_manager.play_sound(ctx, self.hit_sound_id);
                     self.gui_dirty = true;
                 }
@@ -244,7 +253,7 @@ impl MainState {
     /// half of one.
     fn draw_entity(&self, canvas: &mut Canvas, entity: &EntityState) {
         let view = self.camera.view_size();
-        let sprite = self.sprites.for_kind(&entity.kind);
+        let (sprite, tint) = self.sprites.for_kind(&entity.kind);
         // Sprite half-extent in world units (sprites are scaled by
         // camera.scale on draw, so the source pixel size already covers
         // a `sprite_pixels / scale` world-unit disc).
@@ -256,19 +265,26 @@ impl MainState {
             if p.x < -half_world || p.x > view.x + half_world {
                 continue;
             }
-            self.draw_entity_at(canvas, entity, p);
+            self.draw_entity_at(canvas, entity, p, sprite, tint);
         }
     }
 
-    fn draw_entity_at(&self, canvas: &mut Canvas, entity: &EntityState, world_pos: Vec2) {
-        let sprite = self.sprites.for_kind(&entity.kind);
+    fn draw_entity_at(
+        &self,
+        canvas: &mut Canvas,
+        entity: &EntityState,
+        world_pos: Vec2,
+        sprite: &Sprite,
+        tint: Color,
+    ) {
         let screen = self.camera.world_to_screen(world_pos);
         let scale = self.camera.scale();
         let drawparams = DrawParam::new()
             .dest(screen)
             .rotation(entity.facing)
             .scale([scale, scale])
-            .offset(Point2::new(0.5, 0.5));
+            .offset(Point2::new(0.5, 0.5))
+            .color(tint);
         canvas.draw(&sprite.image, drawparams);
     }
 }

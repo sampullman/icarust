@@ -8,6 +8,7 @@
 //! `World::tick(&PlayerInputs, dt) -> Vec<GameEvent>` is the single
 //! authoritative step. `dt` is fixed at `1.0 / 60.0` in production.
 
+pub mod enemy;
 pub mod entity;
 pub mod event;
 pub mod input;
@@ -16,7 +17,7 @@ pub mod player;
 pub mod util;
 pub mod world;
 
-pub use entity::{Entity, EntityId, EntityKind, PlayerId, Tick};
+pub use entity::{Entity, EntityId, EntityKind, PlayerId, ShotOwner, Tick};
 pub use event::GameEvent;
 pub use input::{PlayerInput, PlayerInputs};
 pub use util::{Vec2, vec_from_angle};

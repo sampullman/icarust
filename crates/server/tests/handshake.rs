@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use protocol::{ClientMsg, ServerMsg};
+use sim::entity::ShotOwner;
 use sim::{PlayerInput, Tick};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
@@ -94,7 +95,7 @@ async fn hello_yields_welcome_and_snapshots() {
             ServerMsg::Events { events, .. } => {
                 if events
                     .iter()
-                    .any(|e| matches!(e, sim::GameEvent::ShotFired { owner, .. } if *owner == local_pid))
+                    .any(|e| matches!(e, sim::GameEvent::ShotFired { owner: ShotOwner::Player(pid), .. } if *pid == local_pid))
                 {
                     saw_shot = true;
                 }

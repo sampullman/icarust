@@ -16,11 +16,20 @@ impl Tick {
     }
 }
 
+/// Who fired a shot. Player shots score on rock/enemy kills; enemy shots
+/// don't credit anyone but still kill players.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ShotOwner {
+    Player(PlayerId),
+    Enemy,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum EntityKind {
     Player { player_id: PlayerId },
     Rock,
-    Shot { owner: PlayerId },
+    Shot { owner: ShotOwner },
+    Enemy,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -68,7 +77,7 @@ impl Entity {
         }
     }
 
-    pub fn shot(id: EntityId, owner: PlayerId, pos: Vec2, vel: Vec2, facing: f32) -> Self {
+    pub fn shot(id: EntityId, owner: ShotOwner, pos: Vec2, vel: Vec2, facing: f32) -> Self {
         Entity {
             id,
             kind: EntityKind::Shot { owner },
@@ -78,6 +87,20 @@ impl Entity {
             bbox: crate::world::SHOT_BBOX,
             alive: true,
             ttl: Some(crate::world::SHOT_LIFE),
+            shot_cooldown: 0.0,
+        }
+    }
+
+    pub fn enemy(id: EntityId, pos: Vec2) -> Self {
+        Entity {
+            id,
+            kind: EntityKind::Enemy,
+            pos,
+            vel: Vec2::ZERO,
+            facing: std::f32::consts::PI, // start pointing down (toward play area)
+            bbox: crate::enemy::ENEMY_BBOX,
+            alive: true,
+            ttl: None,
             shot_cooldown: 0.0,
         }
     }

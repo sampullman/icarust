@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::entity::{Entity, EntityId, EntityKind, PlayerId, Tick};
+use crate::entity::{Entity, EntityId, EntityKind, PlayerId, ShotOwner, Tick};
+use crate::enemy::{self, ENEMY_SHOT_SPEED, ENEMY_SHOT_TIME};
 use crate::event::GameEvent;
 use crate::input::PlayerInputs;
 use crate::physics;
@@ -23,6 +24,10 @@ pub const SHOT_LIFE: f32 = 2.0;
 
 pub const ROCKS_PER_LEVEL_BASE: i32 = 5;
 pub const ROCKS_MAX: i32 = 30;
+
+/// Cap on simultaneous enemies. We add one each level-up; this keeps
+/// later levels from getting overwhelming.
+pub const ENEMIES_MAX: i32 = 3;
 
 /// Rocks within this radius of a (re)spawning player are nudged out so
 /// the player isn't killed on the same tick they appear.
@@ -68,6 +73,7 @@ impl World {
             level: 0,
         };
         world.spawn_rocks(ROCKS_PER_LEVEL_BASE);
+        world.spawn_enemy();
         world
     }
 
@@ -128,12 +134,14 @@ impl World {
         Some(id)
     }
 
-    /// Push rocks out of a disc so a freshly-spawned player isn't standing
-    /// on top of one. Rocks are moved to the disc edge along the radial
-    /// direction; their velocity is preserved so the world keeps moving.
+    /// Push rocks and enemies out of a disc so a freshly-spawned player
+    /// isn't standing on top of one. Hostile entities are moved to the
+    /// disc edge along the radial direction; their velocity is preserved
+    /// so the world keeps moving.
     fn clear_safe_zone(&mut self, center: Vec2, radius: f32) {
         for entity in self.entities.values_mut() {
-            if !matches!(entity.kind, EntityKind::Rock) || !entity.alive {
+            let is_hostile = matches!(entity.kind, EntityKind::Rock | EntityKind::Enemy);
+            if !is_hostile || !entity.alive {
                 continue;
             }
             let offset = entity.pos - center;
@@ -191,12 +199,63 @@ impl World {
                 let spawn_pos = entity.pos + direction * player::PLAYER_BBOX;
                 let shot_id = EntityId(self.next_entity_id);
                 self.next_entity_id += 1;
-                let shot = Entity::shot(shot_id, player_id, spawn_pos, direction * SHOT_SPEED, facing);
-                events.push(GameEvent::ShotFired { owner: player_id, pos: spawn_pos });
+                let owner = ShotOwner::Player(player_id);
+                let shot = Entity::shot(shot_id, owner, spawn_pos, direction * SHOT_SPEED, facing);
+                events.push(GameEvent::ShotFired { owner, pos: spawn_pos });
                 new_shots.push(shot);
             }
         }
         for shot in new_shots {
+            self.entities.insert(shot.id, shot);
+        }
+
+        // 1b. Enemy AI. Each enemy targets the nearest live player, steers
+        // toward it, and may fire. Snapshotting target positions before
+        // mutating means the order of enemies in the BTreeMap doesn't
+        // affect the AI decisions on this tick.
+        let player_targets: Vec<Vec2> = self
+            .entities
+            .values()
+            .filter(|e| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
+            .map(|e| e.pos)
+            .collect();
+        let world_width = self.config.world_size.x;
+        let enemy_eids: Vec<EntityId> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| matches!(e.kind, EntityKind::Enemy) && e.alive)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut enemy_shots: Vec<Entity> = Vec::new();
+        for eid in enemy_eids {
+            let Some(entity) = self.entities.get_mut(&eid) else {
+                continue;
+            };
+            let target = nearest_target(entity.pos, &player_targets, world_width);
+            let step = enemy::step(entity.pos, entity.vel, entity.facing, target, world_width, dt);
+            entity.vel = step.vel;
+            entity.facing = step.facing;
+            entity.shot_cooldown -= dt;
+
+            if step.fire && entity.shot_cooldown <= 0.0 {
+                entity.shot_cooldown = ENEMY_SHOT_TIME;
+                let direction = util::vec_from_angle(entity.facing);
+                let spawn_pos = entity.pos + direction * enemy::ENEMY_BBOX;
+                let shot_id = EntityId(self.next_entity_id);
+                self.next_entity_id += 1;
+                let owner = ShotOwner::Enemy;
+                let shot = Entity::shot(
+                    shot_id,
+                    owner,
+                    spawn_pos,
+                    direction * ENEMY_SHOT_SPEED,
+                    entity.facing,
+                );
+                events.push(GameEvent::ShotFired { owner, pos: spawn_pos });
+                enemy_shots.push(shot);
+            }
+        }
+        for shot in enemy_shots {
             self.entities.insert(shot.id, shot);
         }
 
@@ -227,7 +286,7 @@ impl World {
                         }
                     }
                 }
-                EntityKind::Rock => {
+                EntityKind::Rock | EntityKind::Enemy => {
                     util::bounce_y(&mut entity.pos, &mut entity.vel, world_size.y);
                 }
             }
@@ -258,6 +317,14 @@ impl World {
             self.level += 1;
             let count = (self.level + ROCKS_PER_LEVEL_BASE).min(ROCKS_MAX);
             self.spawn_rocks(count);
+            let enemy_count = self
+                .entities
+                .values()
+                .filter(|e| matches!(e.kind, EntityKind::Enemy))
+                .count() as i32;
+            if enemy_count < ENEMIES_MAX {
+                self.spawn_enemy();
+            }
             events.push(GameEvent::LevelUp(self.level));
         }
 
@@ -272,72 +339,186 @@ impl World {
             .filter(|(_, e)| matches!(e.kind, EntityKind::Rock) && e.alive)
             .map(|(id, _)| *id)
             .collect();
+        let enemy_ids: Vec<EntityId> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| matches!(e.kind, EntityKind::Enemy) && e.alive)
+            .map(|(id, _)| *id)
+            .collect();
         let player_ids: Vec<EntityId> = self
             .entities
             .iter()
             .filter(|(_, e)| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
             .map(|(id, _)| *id)
             .collect();
-        let shot_ids: Vec<EntityId> = self
+        let player_shot_ids: Vec<EntityId> = self
             .entities
             .iter()
-            .filter(|(_, e)| matches!(e.kind, EntityKind::Shot { .. }) && e.alive)
+            .filter(|(_, e)| {
+                matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Player(_) }) && e.alive
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let enemy_shot_ids: Vec<EntityId> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Enemy }) && e.alive)
             .map(|(id, _)| *id)
             .collect();
 
+        // Player ↔ rock: player dies, rock keeps going.
         for rock_id in &rock_ids {
-            let rock_alive_pos = match self.entities.get(rock_id) {
-                Some(e) if e.alive => (e.pos, e.bbox),
-                _ => continue,
-            };
-
-            // Player ↔ rock.
             for player_id in &player_ids {
-                let (kill_player, dead_pid) = match (self.entities.get(player_id), self.entities.get(rock_id)) {
-                    (Some(p), Some(r)) if p.alive && r.alive && physics::circles_overlap(p.pos, p.bbox, r.pos, r.bbox) => {
+                if let (Some(p), Some(r)) = (self.entities.get(player_id), self.entities.get(rock_id)) {
+                    if p.alive && r.alive && physics::circles_overlap(p.pos, p.bbox, r.pos, r.bbox) {
                         let pid = match p.kind {
                             EntityKind::Player { player_id } => player_id,
                             _ => continue,
                         };
-                        (true, pid)
+                        if let Some(p) = self.entities.get_mut(player_id) {
+                            p.alive = false;
+                        }
+                        events.push(GameEvent::PlayerKilled(pid));
                     }
-                    _ => (false, PlayerId(0)),
-                };
-                if kill_player {
-                    if let Some(p) = self.entities.get_mut(player_id) {
-                        p.alive = false;
-                    }
-                    events.push(GameEvent::PlayerKilled(dead_pid));
                 }
             }
-
-            // Shot ↔ rock.
-            for shot_id in &shot_ids {
-                let (hit, owner, pos) = match (self.entities.get(shot_id), self.entities.get(rock_id)) {
-                    (Some(s), Some(r)) if s.alive && r.alive && physics::circles_overlap(s.pos, s.bbox, r.pos, r.bbox) => {
-                        let owner = match s.kind {
-                            EntityKind::Shot { owner } => owner,
-                            _ => continue,
-                        };
-                        (true, owner, r.pos)
-                    }
-                    _ => (false, PlayerId(0), Vec2::ZERO),
-                };
-                if hit {
-                    if let Some(s) = self.entities.get_mut(shot_id) {
-                        s.alive = false;
-                    }
-                    if let Some(r) = self.entities.get_mut(rock_id) {
-                        r.alive = false;
-                    }
-                    *self.score_by_player.entry(owner).or_insert(0) += 1;
-                    events.push(GameEvent::RockKilled { pos, killer: owner });
-                    break;
-                }
-            }
-            // bbox/pos read-back to avoid unused warnings on rock_alive_pos
-            let _ = rock_alive_pos;
         }
+
+        // Player shot ↔ rock: both die, owner scores.
+        for rock_id in &rock_ids {
+            for shot_id in &player_shot_ids {
+                let hit = match (self.entities.get(shot_id), self.entities.get(rock_id)) {
+                    (Some(s), Some(r)) if s.alive && r.alive => {
+                        physics::circles_overlap(s.pos, s.bbox, r.pos, r.bbox)
+                    }
+                    _ => false,
+                };
+                if !hit {
+                    continue;
+                }
+                let owner_pid = match self.entities.get(shot_id).map(|s| s.kind) {
+                    Some(EntityKind::Shot { owner: ShotOwner::Player(pid) }) => pid,
+                    _ => continue,
+                };
+                let pos = self.entities.get(rock_id).map(|r| r.pos).unwrap_or(Vec2::ZERO);
+                if let Some(s) = self.entities.get_mut(shot_id) {
+                    s.alive = false;
+                }
+                if let Some(r) = self.entities.get_mut(rock_id) {
+                    r.alive = false;
+                }
+                *self.score_by_player.entry(owner_pid).or_insert(0) += 1;
+                events.push(GameEvent::RockKilled { pos, killer: owner_pid });
+                break;
+            }
+        }
+
+        // Player ↔ enemy: ramming kills both. The player gets credit for
+        // the enemy kill so suicide-runs still count.
+        for enemy_id in &enemy_ids {
+            for player_id in &player_ids {
+                let hit = match (self.entities.get(player_id), self.entities.get(enemy_id)) {
+                    (Some(p), Some(e)) if p.alive && e.alive => {
+                        physics::circles_overlap(p.pos, p.bbox, e.pos, e.bbox)
+                    }
+                    _ => false,
+                };
+                if !hit {
+                    continue;
+                }
+                let pid = match self.entities.get(player_id).map(|p| p.kind) {
+                    Some(EntityKind::Player { player_id }) => player_id,
+                    _ => continue,
+                };
+                let pos = self.entities.get(enemy_id).map(|e| e.pos).unwrap_or(Vec2::ZERO);
+                if let Some(p) = self.entities.get_mut(player_id) {
+                    p.alive = false;
+                }
+                if let Some(e) = self.entities.get_mut(enemy_id) {
+                    e.alive = false;
+                }
+                *self.score_by_player.entry(pid).or_insert(0) += 1;
+                events.push(GameEvent::PlayerKilled(pid));
+                events.push(GameEvent::EnemyKilled { pos, killer: pid });
+            }
+        }
+
+        // Player shot ↔ enemy: enemy dies, owner scores.
+        for enemy_id in &enemy_ids {
+            for shot_id in &player_shot_ids {
+                let hit = match (self.entities.get(shot_id), self.entities.get(enemy_id)) {
+                    (Some(s), Some(e)) if s.alive && e.alive => {
+                        physics::circles_overlap(s.pos, s.bbox, e.pos, e.bbox)
+                    }
+                    _ => false,
+                };
+                if !hit {
+                    continue;
+                }
+                let owner_pid = match self.entities.get(shot_id).map(|s| s.kind) {
+                    Some(EntityKind::Shot { owner: ShotOwner::Player(pid) }) => pid,
+                    _ => continue,
+                };
+                let pos = self.entities.get(enemy_id).map(|e| e.pos).unwrap_or(Vec2::ZERO);
+                if let Some(s) = self.entities.get_mut(shot_id) {
+                    s.alive = false;
+                }
+                if let Some(e) = self.entities.get_mut(enemy_id) {
+                    e.alive = false;
+                }
+                *self.score_by_player.entry(owner_pid).or_insert(0) += 1;
+                events.push(GameEvent::EnemyKilled { pos, killer: owner_pid });
+                break;
+            }
+        }
+
+        // Enemy shot ↔ player: shot dies, player dies.
+        for shot_id in &enemy_shot_ids {
+            for player_id in &player_ids {
+                let hit = match (self.entities.get(shot_id), self.entities.get(player_id)) {
+                    (Some(s), Some(p)) if s.alive && p.alive => {
+                        physics::circles_overlap(s.pos, s.bbox, p.pos, p.bbox)
+                    }
+                    _ => false,
+                };
+                if !hit {
+                    continue;
+                }
+                let pid = match self.entities.get(player_id).map(|p| p.kind) {
+                    Some(EntityKind::Player { player_id }) => player_id,
+                    _ => continue,
+                };
+                if let Some(s) = self.entities.get_mut(shot_id) {
+                    s.alive = false;
+                }
+                if let Some(p) = self.entities.get_mut(player_id) {
+                    p.alive = false;
+                }
+                events.push(GameEvent::PlayerKilled(pid));
+                break;
+            }
+        }
+    }
+
+    /// Spawn one enemy somewhere along the top half of the world, well
+    /// away from the player spawn point. Position is drawn from the world
+    /// RNG so this is deterministic.
+    fn spawn_enemy(&mut self) {
+        let world = self.config.world_size;
+        let center = world * 0.5;
+        // Pick a random angle in the upper half-plane (between 30° and
+        // 150° measuring from +X) so the enemy starts above the play area
+        // rather than sitting next to the player.
+        let span = std::f32::consts::PI * (2.0 / 3.0);
+        let base = std::f32::consts::PI / 6.0;
+        let angle = base + util::rand_unit(&mut self.rng) * span;
+        let radius = world.y * 0.4;
+        let mut pos = center + Vec2::new(angle.cos(), angle.sin()) * radius;
+        pos.x = util::wrap_coord(pos.x, world.x);
+        pos.y = pos.y.clamp(20.0, world.y - 20.0);
+        let id = self.alloc_id();
+        let enemy = Entity::enemy(id, pos);
+        self.entities.insert(id, enemy);
     }
 
     fn spawn_rocks(&mut self, count: i32) {
@@ -362,6 +543,28 @@ impl World {
     }
 }
 
+/// Pick the closest target position from `candidates`, accounting for X-wrap.
+/// Returns `None` when the slice is empty.
+fn nearest_target(from: Vec2, candidates: &[Vec2], world_width: f32) -> Option<Vec2> {
+    let mut best: Option<(f32, Vec2)> = None;
+    let half = world_width * 0.5;
+    for &c in candidates {
+        let mut dx = c.x - from.x;
+        if dx > half {
+            dx -= world_width;
+        } else if dx < -half {
+            dx += world_width;
+        }
+        let dy = c.y - from.y;
+        let d2 = dx * dx + dy * dy;
+        match best {
+            Some((bd, _)) if bd <= d2 => {}
+            _ => best = Some((d2, c)),
+        }
+    }
+    best.map(|(_, c)| c)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +578,69 @@ mod tests {
             .filter(|e| matches!(e.kind, EntityKind::Rock))
             .collect();
         assert_eq!(rocks.len(), ROCKS_PER_LEVEL_BASE as usize);
+    }
+
+    #[test]
+    fn world_spawns_one_enemy_at_start() {
+        let world = World::new(WorldConfig::default());
+        let enemies: Vec<_> = world
+            .entities()
+            .filter(|e| matches!(e.kind, EntityKind::Enemy))
+            .collect();
+        assert_eq!(enemies.len(), 1, "expected exactly one starting enemy");
+    }
+
+    #[test]
+    fn player_shot_can_kill_enemy_and_credit_score() {
+        // Park an enemy directly in front of the player and fire. The
+        // shot should land within a handful of ticks.
+        let mut world = World::new(WorldConfig::default());
+        let pid = PlayerId(0);
+        world.add_player(pid);
+
+        // Place the enemy 60 px directly above the player. facing=0 means
+        // the player is pointing +Y, so the shot heads straight at it.
+        let player_pos = world
+            .player_entity(pid)
+            .expect("player should exist")
+            .pos;
+        let enemy_eid = *world
+            .entities_map()
+            .iter()
+            .find_map(|(id, e)| matches!(e.kind, EntityKind::Enemy).then_some(id))
+            .expect("world should have an enemy");
+        // Park it stationary just out of bbox-overlap range so the player
+        // doesn't ram it before firing.
+        let enemy = world.entities.get_mut(&enemy_eid).unwrap();
+        enemy.pos = player_pos + Vec2::new(0.0, 60.0);
+        enemy.vel = Vec2::ZERO;
+        enemy.facing = 0.0; // pointed away — won't return fire on tick 0
+        // Reset its cooldown so we don't lucky-eat an enemy shot.
+        enemy.shot_cooldown = 5.0;
+
+        let mut inputs = PlayerInputs::new();
+        inputs.insert(
+            pid,
+            PlayerInput {
+                xaxis: 0.0,
+                yaxis: 0.0,
+                fire: true,
+            },
+        );
+
+        let mut killed = false;
+        for _ in 0..30 {
+            let evs = world.tick(&inputs, crate::TICK_DT);
+            if evs
+                .iter()
+                .any(|e| matches!(e, GameEvent::EnemyKilled { killer, .. } if *killer == pid))
+            {
+                killed = true;
+                break;
+            }
+        }
+        assert!(killed, "player shot should have killed the enemy");
+        assert_eq!(world.score(pid), 1);
     }
 
     #[test]
