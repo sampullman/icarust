@@ -5,10 +5,11 @@ use rand_chacha::ChaCha8Rng;
 
 use crate::entity::{Entity, EntityId, EntityKind, PlayerId, ShotOwner, Tick};
 use crate::enemy::{self, ENEMY_SHOT_SPEED, ENEMY_SHOT_TIME};
-use crate::event::GameEvent;
+use crate::event::{DeathCause, GameEvent};
 use crate::input::PlayerInputs;
 use crate::physics;
 use crate::player::{self, PLAYER_SHOT_TIME, SHOT_SPEED};
+use crate::terrain::{self, TerrainBand};
 use crate::util::{self, Vec2};
 
 pub const WORLD_WIDTH: f32 = 1280.0;
@@ -57,6 +58,7 @@ pub struct World {
     players: BTreeMap<PlayerId, EntityId>,
     score_by_player: BTreeMap<PlayerId, i32>,
     level: i32,
+    terrain: Vec<TerrainBand>,
 }
 
 impl World {
@@ -71,10 +73,15 @@ impl World {
             players: BTreeMap::new(),
             score_by_player: BTreeMap::new(),
             level: 0,
+            terrain: terrain::default_terrain(),
         };
         world.spawn_rocks(ROCKS_PER_LEVEL_BASE);
         world.spawn_enemy();
         world
+    }
+
+    pub fn terrain(&self) -> &[TerrainBand] {
+        &self.terrain
     }
 
     pub fn config(&self) -> WorldConfig {
@@ -292,6 +299,13 @@ impl World {
             }
         }
 
+        // 2b. Terrain. A player whose hitbox dips into a terrain band
+        // crashes there. Done before entity-vs-entity collision so a
+        // player who somehow rams a rock and the ground in the same tick
+        // is recorded as a terrain crash (the ground has the last word
+        // when both fire — minor, but we want to be deterministic).
+        self.handle_terrain(&mut events);
+
         // 3. Collisions. Iteration is over BTreeMap so order is deterministic.
         self.handle_collisions(&mut events);
 
@@ -330,6 +344,46 @@ impl World {
 
         self.tick = self.tick.next();
         events
+    }
+
+    fn handle_terrain(&mut self, events: &mut Vec<GameEvent>) {
+        let player_eids: Vec<EntityId> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
+            .map(|(id, _)| *id)
+            .collect();
+        for eid in player_eids {
+            let Some(entity) = self.entities.get_mut(&eid) else {
+                continue;
+            };
+            if !entity.alive {
+                continue;
+            }
+            let Some(kind) = terrain::terrain_hit(entity.pos, entity.bbox, &self.terrain) else {
+                continue;
+            };
+            let player_id = match entity.kind {
+                EntityKind::Player { player_id } => player_id,
+                _ => continue,
+            };
+            // Pin the impact point to the player's X but the band's
+            // surface Y so the client can draw the boom sitting on the
+            // ground rather than half-buried.
+            let surface_y = self
+                .terrain
+                .iter()
+                .filter(|b| b.kind == kind)
+                .map(|b| b.top_y)
+                .fold(0.0_f32, f32::max);
+            let pos = Vec2::new(entity.pos.x, surface_y);
+            entity.alive = false;
+            events.push(GameEvent::PlayerKilled {
+                player_id,
+                pos,
+                cause: DeathCause::Terrain(kind),
+            });
+        }
     }
 
     fn handle_collisions(&mut self, events: &mut Vec<GameEvent>) {
@@ -375,10 +429,15 @@ impl World {
                             EntityKind::Player { player_id } => player_id,
                             _ => continue,
                         };
+                        let pos = p.pos;
                         if let Some(p) = self.entities.get_mut(player_id) {
                             p.alive = false;
                         }
-                        events.push(GameEvent::PlayerKilled(pid));
+                        events.push(GameEvent::PlayerKilled {
+                            player_id: pid,
+                            pos,
+                            cause: DeathCause::Rock,
+                        });
                     }
                 }
             }
@@ -430,6 +489,7 @@ impl World {
                     Some(EntityKind::Player { player_id }) => player_id,
                     _ => continue,
                 };
+                let player_pos = self.entities.get(player_id).map(|p| p.pos).unwrap_or(Vec2::ZERO);
                 let pos = self.entities.get(enemy_id).map(|e| e.pos).unwrap_or(Vec2::ZERO);
                 if let Some(p) = self.entities.get_mut(player_id) {
                     p.alive = false;
@@ -438,7 +498,11 @@ impl World {
                     e.alive = false;
                 }
                 *self.score_by_player.entry(pid).or_insert(0) += 1;
-                events.push(GameEvent::PlayerKilled(pid));
+                events.push(GameEvent::PlayerKilled {
+                    player_id: pid,
+                    pos: player_pos,
+                    cause: DeathCause::Enemy,
+                });
                 events.push(GameEvent::EnemyKilled { pos, killer: pid });
             }
         }
@@ -488,13 +552,18 @@ impl World {
                     Some(EntityKind::Player { player_id }) => player_id,
                     _ => continue,
                 };
+                let pos = self.entities.get(player_id).map(|p| p.pos).unwrap_or(Vec2::ZERO);
                 if let Some(s) = self.entities.get_mut(shot_id) {
                     s.alive = false;
                 }
                 if let Some(p) = self.entities.get_mut(player_id) {
                     p.alive = false;
                 }
-                events.push(GameEvent::PlayerKilled(pid));
+                events.push(GameEvent::PlayerKilled {
+                    player_id: pid,
+                    pos,
+                    cause: DeathCause::EnemyShot,
+                });
                 break;
             }
         }
@@ -712,6 +781,33 @@ mod tests {
             .filter(|e| matches!(e.kind, EntityKind::Rock))
             .count();
         assert!(rock_count > 0);
+    }
+
+    #[test]
+    fn player_touching_ground_crashes_with_terrain_cause() {
+        // Park the player just above the ground band and tick once. The
+        // terrain check must fire and produce a Terrain(Ground) death.
+        let mut world = World::new(WorldConfig::default());
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        let player_eid = *world.players.get(&pid).unwrap();
+        let player = world.entities.get_mut(&player_eid).unwrap();
+        // bbox (12) + a sliver: with no movement this tick the bottom
+        // of the hitbox sits just inside the ground.
+        player.pos = Vec2::new(WORLD_WIDTH * 0.5, terrain::GROUND_HEIGHT + 11.0);
+        player.vel = Vec2::ZERO;
+
+        let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        let crash = evs.iter().find_map(|e| match e {
+            GameEvent::PlayerKilled { player_id, cause, .. } if *player_id == pid => Some(*cause),
+            _ => None,
+        });
+        assert_eq!(
+            crash,
+            Some(crate::DeathCause::Terrain(crate::TerrainKind::Ground)),
+            "player on the ground should crash with a Terrain(Ground) cause"
+        );
+        assert!(world.player_entity(pid).is_none());
     }
 
     #[test]

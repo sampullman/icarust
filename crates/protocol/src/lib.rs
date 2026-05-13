@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use sim::entity::{EntityId, EntityKind, PlayerId, Tick};
+use sim::terrain::TerrainBand;
 use sim::util::WireVec2;
 use sim::{GameEvent, PlayerInput};
 
@@ -43,6 +44,9 @@ pub struct Snapshot {
     pub entities: Vec<EntityState>,
     pub score_by_player: Vec<(PlayerId, i32)>,
     pub level: i32,
+    /// Active terrain layout. Re-sent every snapshot so the client can
+    /// pick up new terrain when levels eventually change it.
+    pub terrain: Vec<TerrainBand>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -84,10 +88,12 @@ pub fn snapshot_from_world(world: &sim::World) -> Snapshot {
         .map(EntityState::from_entity)
         .collect();
     let score_by_player = world.scores().iter().map(|(p, s)| (*p, *s)).collect();
+    let terrain = world.terrain().to_vec();
     Snapshot {
         tick: world.tick_index(),
         entities,
         score_by_player,
         level: world.level(),
+        terrain,
     }
 }

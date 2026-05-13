@@ -14,12 +14,14 @@ pub mod event;
 pub mod input;
 pub mod physics;
 pub mod player;
+pub mod terrain;
 pub mod util;
 pub mod world;
 
 pub use entity::{Entity, EntityId, EntityKind, PlayerId, ShotOwner, Tick};
-pub use event::GameEvent;
+pub use event::{DeathCause, GameEvent};
 pub use input::{PlayerInput, PlayerInputs};
+pub use terrain::{TerrainBand, TerrainKind};
 pub use util::{Vec2, vec_from_angle};
 pub use world::{World, WorldConfig};
 

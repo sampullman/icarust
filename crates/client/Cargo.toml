@@ -14,6 +14,8 @@ sim = { workspace = true }
 protocol = { workspace = true }
 glam = { workspace = true }
 postcard = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

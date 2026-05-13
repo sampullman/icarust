@@ -15,6 +15,8 @@ use protocol::{ClientMsg, EntityState, ServerMsg, Snapshot};
 use sim::entity::EntityKind;
 use sim::{GameEvent, PlayerId, Tick};
 
+use crate::render::explosion::{Explosion, ExplosionStyle};
+
 const ENEMY_TINT: Color = Color::new(0.95, 0.30, 0.30, 1.0);
 const ENEMY_SHOT_TINT: Color = Color::new(1.0, 0.45, 0.20, 1.0);
 
@@ -88,6 +90,12 @@ struct MainState {
     game_over: bool,
     cached_score: i32,
     cached_level: i32,
+    /// Active particle bursts. Owned client-side; not part of the sim.
+    /// Each `PlayerKilled` event spawns one.
+    explosions: Vec<Explosion>,
+    /// Monotonic counter used as a per-explosion RNG seed so simultaneous
+    /// bursts don't render identically.
+    next_explosion_seed: u64,
 }
 
 impl MainState {
@@ -138,6 +146,8 @@ impl MainState {
             game_over: false,
             cached_score: 0,
             cached_level: 0,
+            explosions: Vec::new(),
+            next_explosion_seed: 1,
         })
     }
 
@@ -176,16 +186,25 @@ impl MainState {
                     self.asset_manager.play_sound(ctx, self.hit_sound_id);
                     self.gui_dirty = true;
                 }
-                GameEvent::PlayerKilled(pid) if Some(*pid) == self.local_player_id => {
-                    self.game_over = true;
-                    self.gui_dirty = true;
+                GameEvent::PlayerKilled { player_id, pos, cause } => {
+                    self.spawn_explosion(Vec2::new(pos.x, pos.y), ExplosionStyle::for_cause(cause));
+                    self.asset_manager.play_sound(ctx, self.hit_sound_id);
+                    if Some(*player_id) == self.local_player_id {
+                        self.game_over = true;
+                        self.gui_dirty = true;
+                    }
                 }
                 GameEvent::LevelUp(_) | GameEvent::PlayerJoined(_) | GameEvent::PlayerLeft(_) => {
                     self.gui_dirty = true;
                 }
-                _ => {}
             }
         }
+    }
+
+    fn spawn_explosion(&mut self, pos: Vec2, style: ExplosionStyle) {
+        let seed = self.next_explosion_seed;
+        self.next_explosion_seed = self.next_explosion_seed.wrapping_add(1);
+        self.explosions.push(Explosion::new(pos, style, seed));
     }
 
     fn local_player(&self) -> Option<&EntityState> {
@@ -320,6 +339,14 @@ impl EventHandler for MainState {
             self.net.send(&input_msg);
         }
 
+        // Step active explosions on real elapsed time so they look the
+        // same regardless of the fixed-step input cadence.
+        let dt = ctx.time.delta().as_secs_f32();
+        for ex in &mut self.explosions {
+            ex.update(dt);
+        }
+        self.explosions.retain(|e| !e.done());
+
         let snap_score = self
             .latest_snapshot
             .as_ref()
@@ -345,11 +372,21 @@ impl EventHandler for MainState {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
 
         if let Some(snap) = &self.latest_snapshot {
+            // Terrain underneath everything.
+            render::terrain::draw(&mut canvas, &self.camera, &snap.terrain);
+
             for entity in &snap.entities {
                 if !entity.alive {
                     continue;
                 }
                 self.draw_entity(&mut canvas, entity);
+            }
+
+            // Explosions render on top of entities so a fresh boom is
+            // visible even while the doomed sprite is still being drawn
+            // by the same snapshot.
+            for ex in &self.explosions {
+                ex.draw(&mut canvas, &self.camera);
             }
 
             self.level_text.draw(&mut canvas);
