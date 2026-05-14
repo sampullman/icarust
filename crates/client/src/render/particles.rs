@@ -222,6 +222,36 @@ impl DamageSmoker {
         }
     }
 
+    /// Bright spark shower for the "moment of impact" feedback. Reads
+    /// on top of the brown smoke as a hot orange/yellow shatter so the
+    /// player can tell a shot landed even before any HP bar moves.
+    /// Sparks are fast, short-lived, and fall under gravity so they
+    /// don't linger like the smoke does.
+    pub fn spark_burst(&mut self, pos: Vec2, count: usize) {
+        for _ in 0..count {
+            let angle = self.rng.gen::<f32>() * std::f32::consts::TAU;
+            let speed = 110.0 + self.rng.gen::<f32>() * 130.0;
+            let vel = Vec2::new(angle.cos() * speed, angle.sin() * speed);
+            let life = 0.12 + self.rng.gen::<f32>() * 0.20;
+            // Roughly half-and-half mix of hot core sparks and cooler
+            // orange edge sparks. Core sparks are tinier and brighter
+            // so the center of the burst pops.
+            let hot = self.rng.gen::<f32>() < 0.45;
+            let color = if hot { FLAME_CORE_COLOR } else { FLAME_EDGE_COLOR };
+            self.particles.push(Particle {
+                pos,
+                vel,
+                life,
+                max_life: life,
+                color,
+                radius: if hot { 1.3 } else { 1.8 },
+                // Steep gravity so sparks plummet — reinforces the
+                // "shrapnel" feel rather than slow drifting smoke.
+                accel: Vec2::new(0.0, -360.0),
+            });
+        }
+    }
+
     fn emit_one(&mut self, pos: Vec2) {
         let angle = self.rng.gen::<f32>() * std::f32::consts::TAU;
         let speed = 18.0 + self.rng.gen::<f32>() * 28.0;

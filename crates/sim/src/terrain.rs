@@ -39,6 +39,36 @@ pub fn default_terrain() -> Vec<TerrainBand> {
     }]
 }
 
+/// World-Y of the ground surface at horizontal position `x`. Today the
+/// terrain is flat so `x` is ignored, but the signature already accepts
+/// it so future hill / mountain bands can return a per-x height without
+/// every caller having to switch helper. Returns `0.0` when no Ground
+/// band is present.
+pub fn ground_surface_at(_x: f32, bands: &[TerrainBand]) -> f32 {
+    bands
+        .iter()
+        .filter(|b| b.kind == TerrainKind::Ground)
+        .map(|b| b.top_y)
+        .fold(0.0_f32, f32::max)
+}
+
+/// Whether the given X is passable for a ground vehicle (a tank). Today
+/// the ground is uniformly solid so this is always `true`; once water /
+/// mountain bands exist they should return `false` at the X-ranges they
+/// cover so tanks stop at their edges instead of rolling through.
+pub fn passable_for_ground_vehicle(_x: f32, _bands: &[TerrainBand]) -> bool {
+    true
+}
+
+/// Highest `top_y` across all bands — the upper surface that flying
+/// objects (shots, enemies) bounce off of. Players already crash on
+/// any contact via `terrain_hit`; this is for the rebound path. Returns
+/// `0.0` when no bands are present so the world bottom is still the
+/// effective floor.
+pub fn surface_y(bands: &[TerrainBand]) -> f32 {
+    bands.iter().map(|b| b.top_y).fold(0.0_f32, f32::max)
+}
+
 /// If a circle of `(pos, bbox)` overlaps any terrain band, return the
 /// topmost overlapping band's kind. Topmost wins so layered bands behave
 /// the way you'd expect — splash the water before crunching the seabed.

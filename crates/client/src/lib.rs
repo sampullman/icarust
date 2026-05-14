@@ -29,7 +29,9 @@ use crate::input::InputState;
 use crate::net::Net;
 use crate::render::camera::{Camera, Point2};
 use crate::render::entities::{
-    EntityMeshes, ENEMY_COLOR, ENEMY_SHOT_COLOR, PLAYER_COLOR, PLAYER_SHOT_COLOR, ROCK_COLOR,
+    ship_wing_factor, EntityMeshes, ShipMesh, TankMesh, ENEMY_COLOR, ENEMY_SHOT_COLOR,
+    PLAYER_COLOR, PLAYER_SHOT_COLOR, TANK_COLOR, TANK_TREAD_BAND_Y, TANK_TREAD_HALF_WIDTH,
+    TANK_TREAD_LINK_COLOR, TANK_TREAD_LINK_SPACING, TANK_TURRET_PIVOT_Y,
 };
 use crate::render::particles::{DamageSmoker, ThrustEmitter};
 use crate::render::sky::{Sky, SKY_COLOR};
@@ -49,22 +51,47 @@ fn print_instructions() {
     tracing::info!("Controls: Left/Right rotate, Up thrust, Space fire, R restart, Esc quit");
 }
 
-/// Pick the mesh + tint to draw for a given entity kind. Each kind has a
+/// What to draw for an entity. Ships need their wings scaled separately
+/// from the body for a banking effect; tanks need an independent turret
+/// rotation; everything else is a single mesh. New entity-render shapes
+/// (helicopters, gunboats, ...) join this enum.
+enum EntityVisual<'a> {
+    Ship { ship: &'a ShipMesh, tint: Color },
+    Tank { tank: &'a TankMesh, tint: Color },
+    Single { mesh: &'a Mesh, tint: Color },
+}
+
+/// Pick the right `EntityVisual` for a given entity kind. Each kind has a
 /// dedicated mesh built procedurally at startup (see `render::entities`);
 /// the color here multiplies against the mesh's white vertices so we can
 /// retint at draw time without re-uploading geometry.
-fn mesh_for_kind<'a>(meshes: &'a EntityMeshes, kind: &EntityKind) -> (&'a Mesh, Color) {
+fn visual_for_kind<'a>(meshes: &'a EntityMeshes, kind: &EntityKind) -> EntityVisual<'a> {
     use sim::entity::ShotOwner;
     match kind {
-        EntityKind::Player { .. } => (&meshes.player, PLAYER_COLOR),
-        EntityKind::Rock => (&meshes.rock, ROCK_COLOR),
+        EntityKind::Player { .. } => EntityVisual::Ship {
+            ship: &meshes.player,
+            tint: PLAYER_COLOR,
+        },
+        EntityKind::Enemy => EntityVisual::Ship {
+            ship: &meshes.enemy,
+            tint: ENEMY_COLOR,
+        },
+        EntityKind::Tank => EntityVisual::Tank {
+            tank: &meshes.tank,
+            tint: TANK_COLOR,
+        },
         EntityKind::Shot {
             owner: ShotOwner::Player(_),
-        } => (&meshes.shot, PLAYER_SHOT_COLOR),
+        } => EntityVisual::Single {
+            mesh: &meshes.shot,
+            tint: PLAYER_SHOT_COLOR,
+        },
         EntityKind::Shot {
             owner: ShotOwner::Enemy,
-        } => (&meshes.shot, ENEMY_SHOT_COLOR),
-        EntityKind::Enemy => (&meshes.enemy, ENEMY_COLOR),
+        } => EntityVisual::Single {
+            mesh: &meshes.shot,
+            tint: ENEMY_SHOT_COLOR,
+        },
     }
 }
 
@@ -93,8 +120,43 @@ fn extrapolated_pos(e: &EntityState, time_since_snapshot: f32) -> Vec2 {
 fn sprite_half_extent(kind: &EntityKind) -> f32 {
     match kind {
         EntityKind::Player { .. } | EntityKind::Enemy => 18.0,
-        EntityKind::Rock => 12.0,
+        // Tank silhouette is widest at the cannon when the turret is
+        // horizontal — about 22 world units from chassis center.
+        EntityKind::Tank => 24.0,
         EntityKind::Shot { .. } => 6.0,
+    }
+}
+
+/// Draw the animated tread links for one tank on top of its chassis.
+/// Links are anchored to ground X (a function of `pos.x` alone) so they
+/// appear to slide backwards as the chassis rolls forward. `cand` is
+/// the chassis's wrap-adjusted world X for the current draw copy.
+fn draw_tank_treads(
+    canvas: &mut Canvas,
+    camera: &Camera,
+    tank: &TankMesh,
+    pos: Vec2,
+    cand: f32,
+    scale: f32,
+) {
+    let spacing = TANK_TREAD_LINK_SPACING;
+    // Range of integer link indices whose world X falls within the
+    // tread band centred on `pos.x`.
+    let k_min = ((pos.x - TANK_TREAD_HALF_WIDTH) / spacing).ceil() as i32;
+    let k_max = ((pos.x + TANK_TREAD_HALF_WIDTH) / spacing).floor() as i32;
+    let band_world_y = pos.y + TANK_TREAD_BAND_Y;
+    for k in k_min..=k_max {
+        let local_offset = (k as f32) * spacing - pos.x;
+        let world = Vec2::new(cand + local_offset, band_world_y);
+        let screen = camera.world_to_screen(world);
+        canvas.draw(
+            &tank.tread_link,
+            DrawParam::new()
+                .dest(screen)
+                .rotation(0.0)
+                .scale([scale, scale])
+                .color(TANK_TREAD_LINK_COLOR),
+        );
     }
 }
 
@@ -249,16 +311,30 @@ impl MainState {
                 GameEvent::ShotFired { .. } => {
                     self.play_sound(ctx, self.shot_sound_id);
                 }
-                GameEvent::RockKilled { pos, .. } | GameEvent::EnemyKilled { pos, .. } => {
+                GameEvent::EnemyKilled { pos, .. } => {
                     self.spawn_explosion(Vec2::new(pos.x, pos.y), ExplosionStyle::FieryBurst);
                     self.play_sound(ctx, self.hit_sound_id);
                     self.gui_dirty = true;
                 }
+                GameEvent::EnemyDamaged { pos, .. } => {
+                    // Smaller feedback than a kill: a brief spark shower
+                    // plus a few smoke puffs so the player can tell the
+                    // bullet landed even though the hostile is still
+                    // alive. Sparks read more clearly than smoke against
+                    // armored hulls (tanks especially).
+                    let p = Vec2::new(pos.x, pos.y);
+                    self.smoke.spark_burst(p, 10);
+                    self.smoke.puff_burst(p, 4);
+                    self.play_sound(ctx, self.hit_sound_id);
+                }
                 GameEvent::PlayerDamaged { pos, .. } => {
-                    // Small burst of smoke + a thump sound. The steady-
-                    // state smoke trail is driven from snapshot HP, but a
-                    // one-shot puff sells the impact at the right moment.
-                    self.smoke.puff_burst(Vec2::new(pos.x, pos.y), 6);
+                    // Player hit feedback: sparks plus smoke. The
+                    // steady-state smoke trail is driven from snapshot
+                    // HP, but a one-shot burst sells the impact at the
+                    // right moment.
+                    let p = Vec2::new(pos.x, pos.y);
+                    self.smoke.spark_burst(p, 8);
+                    self.smoke.puff_burst(p, 4);
                     self.play_sound(ctx, self.hit_sound_id);
                 }
                 GameEvent::PlayerKilled {
@@ -352,8 +428,13 @@ impl MainState {
     /// Draw an entity at every visible toroidal copy. Only X wraps — Y
     /// is a hard wall in the sim — so we ask the camera for the up-to-
     /// three candidate X positions that land inside the viewport.
+    ///
+    /// Ships draw their body and wings separately so the wings can be
+    /// scaled along the local-X axis (`ship_wing_factor`) to fake banking.
+    /// Pre-rotation scaling means the foreshortening rotates correctly
+    /// with the ship's facing.
     fn draw_entity(&self, canvas: &mut Canvas, entity: &EntityState) {
-        let (mesh, tint) = mesh_for_kind(&self.meshes, &entity.kind);
+        let visual = visual_for_kind(&self.meshes, &entity.kind);
         let half = sprite_half_extent(&entity.kind);
         let scale = self.camera.scale();
         let pos = self.extrapolated_pos(entity);
@@ -364,12 +445,59 @@ impl MainState {
             .flatten()
         {
             let screen = self.camera.world_to_screen(Vec2::new(cand, pos.y));
-            let params = DrawParam::new()
-                .dest(screen)
-                .rotation(entity.facing)
-                .scale([scale, scale])
-                .color(tint);
-            canvas.draw(mesh, params);
+            match visual {
+                EntityVisual::Single { mesh, tint } => {
+                    let params = DrawParam::new()
+                        .dest(screen)
+                        .rotation(entity.facing)
+                        .scale([scale, scale])
+                        .color(tint);
+                    canvas.draw(mesh, params);
+                }
+                EntityVisual::Ship { ship, tint } => {
+                    let wing = ship_wing_factor(entity.facing);
+                    let base = DrawParam::new()
+                        .dest(screen)
+                        .rotation(entity.facing)
+                        .color(tint);
+                    canvas.draw(&ship.wings, base.scale([scale * wing, scale]));
+                    canvas.draw(&ship.body, base.scale([scale, scale]));
+                }
+                EntityVisual::Tank { tank, tint } => {
+                    // Chassis: body angle determines whether we flip
+                    // horizontally. Body facing of +PI/2 (right) yields
+                    // scale_x = +1; -PI/2 (left) yields -1; falling back
+                    // to +1 when facing is exactly 0 (just-spawned tank
+                    // before it picked a side).
+                    let body_dir = if entity.facing < 0.0 { -1.0 } else { 1.0 };
+                    canvas.draw(
+                        &tank.chassis,
+                        DrawParam::new()
+                            .dest(screen)
+                            .rotation(0.0)
+                            .scale([scale * body_dir, scale])
+                            .color(tint),
+                    );
+                    // Tread link overlay — drawn at world positions
+                    // anchored to the ground (a function of pos.x), so
+                    // they appear to scroll opposite to motion as the
+                    // chassis rolls. Independent of body_dir flip.
+                    draw_tank_treads(canvas, &self.camera, tank, pos, cand, scale);
+                    // Turret: pivots on top of the hull rather than at
+                    // the chassis center, so we offset the destination
+                    // by `TANK_TURRET_PIVOT_Y` world units in Y-up.
+                    let turret_world = Vec2::new(cand, pos.y + TANK_TURRET_PIVOT_Y);
+                    let turret_screen = self.camera.world_to_screen(turret_world);
+                    canvas.draw(
+                        &tank.turret,
+                        DrawParam::new()
+                            .dest(turret_screen)
+                            .rotation(entity.turret_facing)
+                            .scale([scale, scale])
+                            .color(tint),
+                    );
+                }
+            }
         }
     }
 

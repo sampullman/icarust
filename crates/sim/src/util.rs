@@ -62,15 +62,15 @@ pub fn clamp_y(pos: &mut Vec2, vel: &mut Vec2, height: f32) {
     }
 }
 
-/// Reflect a position back inside `[0, height]` and flip vertical velocity.
+/// Reflect a position back inside `[low, high]` and flip vertical velocity.
 /// Used for objects that should bounce off the floor/ceiling rather than
-/// pile up on it (rocks, shots).
-pub fn bounce_y(pos: &mut Vec2, vel: &mut Vec2, height: f32) {
-    if pos.y < 0.0 {
-        pos.y = -pos.y;
+/// pile up on it (shots).
+pub fn bounce_y(pos: &mut Vec2, vel: &mut Vec2, low: f32, high: f32) {
+    if pos.y < low {
+        pos.y = 2.0 * low - pos.y;
         vel.y = vel.y.abs();
-    } else if pos.y > height {
-        pos.y = 2.0 * height - pos.y;
+    } else if pos.y > high {
+        pos.y = 2.0 * high - pos.y;
         vel.y = -vel.y.abs();
     }
 }

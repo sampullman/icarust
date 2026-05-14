@@ -59,11 +59,17 @@ pub struct EntityState {
     pub kind: EntityKind,
     pub pos: WireVec2,
     pub vel: WireVec2,
+    /// Body orientation (radians). For ships and shots this is the nose
+    /// angle; for tanks it's the chassis angle (always near `±PI/2`).
     pub facing: f32,
+    /// Independent turret aim direction (radians). Only meaningful for
+    /// tanks; ships/shots send 0.0.
+    pub turret_facing: f32,
     pub alive: bool,
-    /// Current HP (only meaningful for player entities; zero otherwise).
+    /// Current HP. Meaningful for any entity with `max_hp > 0` (player,
+    /// tanks); zero elsewhere.
     pub hp: i16,
-    /// Max HP (only meaningful for player entities; zero otherwise).
+    /// Max HP. Zero on entities that don't carry HP.
     pub max_hp: i16,
     /// True if a player entity is firing thrust this tick. Client uses
     /// this to draw exhaust flames behind the ship.
@@ -78,6 +84,7 @@ impl EntityState {
             pos: e.pos.into(),
             vel: e.vel.into(),
             facing: e.facing,
+            turret_facing: e.turret_facing,
             alive: e.alive,
             hp: e.hp,
             max_hp: e.max_hp,

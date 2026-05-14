@@ -14,6 +14,7 @@ pub mod event;
 pub mod input;
 pub mod physics;
 pub mod player;
+pub mod tank;
 pub mod terrain;
 pub mod util;
 pub mod world;

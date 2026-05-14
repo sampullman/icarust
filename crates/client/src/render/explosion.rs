@@ -21,7 +21,7 @@ use crate::render::camera::Camera;
 #[derive(Debug, Clone, Copy)]
 pub enum ExplosionStyle {
     /// Generic mid-air burst — orange embers + bright core. Used for
-    /// rocks, enemies, enemy shots.
+    /// enemies and enemy shots.
     FieryBurst,
     /// Ground impact — fewer hot embers, plus brown dust kicked up.
     DustAndEmbers,
@@ -31,9 +31,7 @@ impl ExplosionStyle {
     pub fn for_cause(cause: &DeathCause) -> Self {
         match cause {
             DeathCause::Terrain(TerrainKind::Ground) => ExplosionStyle::DustAndEmbers,
-            DeathCause::Rock | DeathCause::Enemy | DeathCause::EnemyShot => {
-                ExplosionStyle::FieryBurst
-            }
+            DeathCause::Enemy | DeathCause::EnemyShot => ExplosionStyle::FieryBurst,
         }
     }
 }

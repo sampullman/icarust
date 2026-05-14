@@ -240,7 +240,7 @@ async fn game_loop(
                     current_inputs.insert(pid, input);
                 }
                 Ok(Command::Respawn(pid)) => {
-                    if world.add_player(pid).is_some() {
+                    if world.respawn_player(pid).is_some() {
                         // Drop any held input from before death so the
                         // respawned ship doesn't immediately fly off.
                         current_inputs.remove(&pid);

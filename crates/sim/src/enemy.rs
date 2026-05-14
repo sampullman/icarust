@@ -12,6 +12,9 @@ use std::f32::consts::{PI, TAU};
 use crate::util::{self, Vec2};
 
 pub const ENEMY_BBOX: f32 = 14.0;
+/// Ship enemies die in one shot — `hp == max_hp == 1`. Kept as a named
+/// constant so it's symmetric with `tank::TANK_HP` in damage handling.
+pub const ENEMY_HP: i16 = 1;
 /// Acceleration applied when thrusting toward the target (units/s²).
 pub const ENEMY_THRUST: f32 = 180.0;
 pub const ENEMY_MAX_SPEED: f32 = 130.0;
