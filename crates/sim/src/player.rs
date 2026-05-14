@@ -13,6 +13,14 @@ pub const PLAYER_TURN_RATE: f32 = 3.0;
 pub const PLAYER_SHOT_TIME: f32 = 0.3;
 pub const SHOT_SPEED: f32 = 340.0;
 
+/// Player hit-point ceiling. Enemy bullets chip one HP at a time; rocks,
+/// ramming, and terrain crashes are still instant kills.
+pub const PLAYER_MAX_HP: i16 = 5;
+/// Seconds of "no damage taken" before HP starts ticking back up.
+pub const PLAYER_REGEN_DELAY: f32 = 3.0;
+/// Seconds between each +1 HP tick once regen kicks in.
+pub const PLAYER_REGEN_INTERVAL: f32 = 1.5;
+
 /// Pure rotation + thrust step. Returns `(new_velocity, new_facing)`.
 pub fn apply_input(velocity: Vec2, facing: f32, input: &PlayerInput, dt: f32) -> (Vec2, f32) {
     let new_facing = facing + dt * PLAYER_TURN_RATE * input.xaxis;

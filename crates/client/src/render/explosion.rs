@@ -98,16 +98,21 @@ impl Explosion {
             let alpha = (t * 1.6).min(1.0);
             let mut color = p.color;
             color.a = alpha;
-            let screen = camera.world_to_screen(p.pos);
             let half = p.radius * scale;
-            let dest = Vec2::new(screen.x - half, screen.y - half);
-            canvas.draw(
-                &graphics::Quad,
-                DrawParam::new()
-                    .dest(dest)
-                    .scale([half * 2.0, half * 2.0])
-                    .color(color),
-            );
+            // Particles near the world's X-wrap need to be drawn at every
+            // visible toroidal copy so an explosion that straddles the
+            // seam doesn't half-vanish.
+            for cand in camera.world_x_offsets_for(p.pos.x, p.radius).into_iter().flatten() {
+                let screen = camera.world_to_screen(Vec2::new(cand, p.pos.y));
+                let dest = Vec2::new(screen.x - half, screen.y - half);
+                canvas.draw(
+                    &graphics::Quad,
+                    DrawParam::new()
+                        .dest(dest)
+                        .scale([half * 2.0, half * 2.0])
+                        .color(color),
+                );
+            }
         }
     }
 }

@@ -61,6 +61,13 @@ pub struct EntityState {
     pub vel: WireVec2,
     pub facing: f32,
     pub alive: bool,
+    /// Current HP (only meaningful for player entities; zero otherwise).
+    pub hp: i16,
+    /// Max HP (only meaningful for player entities; zero otherwise).
+    pub max_hp: i16,
+    /// True if a player entity is firing thrust this tick. Client uses
+    /// this to draw exhaust flames behind the ship.
+    pub thrusting: bool,
 }
 
 impl EntityState {
@@ -72,6 +79,9 @@ impl EntityState {
             vel: e.vel.into(),
             facing: e.facing,
             alive: e.alive,
+            hp: e.hp,
+            max_hp: e.max_hp,
+            thrusting: e.thrusting,
         }
     }
 }

@@ -17,7 +17,7 @@ impl Tick {
 }
 
 /// Who fired a shot. Player shots score on rock/enemy kills; enemy shots
-/// don't credit anyone but still kill players.
+/// don't credit anyone but still chip away at player HP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShotOwner {
     Player(PlayerId),
@@ -44,12 +44,24 @@ pub struct Entity {
     /// Lifetime in seconds (only meaningful for shots).
     pub ttl: Option<f32>,
     /// Seconds until this player can fire next; `<= 0` means ready.
-    /// Only meaningful for players.
+    /// Only meaningful for players and enemies.
     pub shot_cooldown: f32,
+    /// Current hit points. Only meaningful for players; non-player kinds
+    /// keep this at 0.
+    pub hp: i16,
+    /// Maximum hit points for this entity (only meaningful for players).
+    pub max_hp: i16,
+    /// Seconds since the player last took damage. Players regen HP after a
+    /// grace period of `player::PLAYER_REGEN_DELAY` seconds.
+    pub damage_timer: f32,
+    /// True if the player is firing thrust this tick. Surfaces to the
+    /// client so it can draw a flame/exhaust trail.
+    pub thrusting: bool,
 }
 
 impl Entity {
     pub fn player(id: EntityId, player_id: PlayerId, pos: Vec2) -> Self {
+        let max_hp = crate::player::PLAYER_MAX_HP;
         Entity {
             id,
             kind: EntityKind::Player { player_id },
@@ -60,6 +72,12 @@ impl Entity {
             alive: true,
             ttl: None,
             shot_cooldown: 0.0,
+            hp: max_hp,
+            max_hp,
+            // Start "fully healed" — large value, regen logic is dormant
+            // until the first hit lands.
+            damage_timer: f32::MAX / 2.0,
+            thrusting: false,
         }
     }
 
@@ -74,6 +92,10 @@ impl Entity {
             alive: true,
             ttl: None,
             shot_cooldown: 0.0,
+            hp: 0,
+            max_hp: 0,
+            damage_timer: 0.0,
+            thrusting: false,
         }
     }
 
@@ -88,6 +110,10 @@ impl Entity {
             alive: true,
             ttl: Some(crate::world::SHOT_LIFE),
             shot_cooldown: 0.0,
+            hp: 0,
+            max_hp: 0,
+            damage_timer: 0.0,
+            thrusting: false,
         }
     }
 
@@ -102,6 +128,10 @@ impl Entity {
             alive: true,
             ttl: None,
             shot_cooldown: 0.0,
+            hp: 0,
+            max_hp: 0,
+            damage_timer: 0.0,
+            thrusting: false,
         }
     }
 

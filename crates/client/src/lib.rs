@@ -6,9 +6,9 @@
 //! `#[wasm_bindgen(start)]`.
 
 use ggez::conf;
-use ggez::event::{self, EventHandler};
+use ggez::event::EventHandler;
 use ggez::glam::Vec2;
-use ggez::graphics::{self, Canvas, Color, DrawParam};
+use ggez::graphics::{self, Canvas, Color, DrawParam, Mesh};
 use ggez::input::keyboard::KeyInput;
 use ggez::{Context, ContextBuilder, GameResult};
 
@@ -18,100 +18,83 @@ use sim::{GameEvent, PlayerId, Tick};
 
 use crate::render::explosion::{Explosion, ExplosionStyle};
 
-const ENEMY_TINT: Color = Color::new(0.95, 0.30, 0.30, 1.0);
-const ENEMY_SHOT_TINT: Color = Color::new(1.0, 0.45, 0.20, 1.0);
-
 pub mod assets;
 pub mod input;
 pub mod net;
 pub mod render;
 pub mod widget;
 
-use crate::assets::{AssetManager, SoundId, Sprite};
+use crate::assets::{AssetManager, SoundId};
 use crate::input::InputState;
 use crate::net::Net;
 use crate::render::camera::{Camera, Point2};
+use crate::render::entities::{
+    EntityMeshes, ENEMY_COLOR, ENEMY_SHOT_COLOR, PLAYER_COLOR, PLAYER_SHOT_COLOR, ROCK_COLOR,
+};
+use crate::render::particles::{DamageSmoker, ThrustEmitter};
+use crate::render::sky::{Sky, SKY_COLOR};
 use crate::widget::TextWidget;
 
-const VIEW_WIDTH: f32 = sim::world::WORLD_WIDTH;
+/// Visible window onto the world, in world units. The world itself is
+/// larger (`sim::world::WORLD_WIDTH`) so the camera can scroll instead of
+/// jumping at the seam.
+const VIEW_WIDTH: f32 = 1280.0;
 const VIEW_HEIGHT: f32 = sim::world::WORLD_HEIGHT;
+/// How quickly the camera homes in on the player each second. 8.0 is a
+/// good middle ground — responsive but doesn't snap.
+const CAMERA_FOLLOW_RATE: f32 = 8.0;
 
 fn print_instructions() {
     tracing::info!("Welcome to Icarust!");
     tracing::info!("Controls: Left/Right rotate, Up thrust, Space fire, R restart, Esc quit");
 }
 
-/// Hidden tabs throttle rAF but keep firing `onmessage` and would
-/// otherwise leak audio sinks. Always false on native.
-#[cfg(target_arch = "wasm32")]
-fn document_hidden() -> bool {
-    web_sys::window()
-        .and_then(|w| w.document())
-        .map(|d| d.hidden())
-        .unwrap_or(false)
+/// Pick the mesh + tint to draw for a given entity kind. Each kind has a
+/// dedicated mesh built procedurally at startup (see `render::entities`);
+/// the color here multiplies against the mesh's white vertices so we can
+/// retint at draw time without re-uploading geometry.
+fn mesh_for_kind<'a>(meshes: &'a EntityMeshes, kind: &EntityKind) -> (&'a Mesh, Color) {
+    use sim::entity::ShotOwner;
+    match kind {
+        EntityKind::Player { .. } => (&meshes.player, PLAYER_COLOR),
+        EntityKind::Rock => (&meshes.rock, ROCK_COLOR),
+        EntityKind::Shot {
+            owner: ShotOwner::Player(_),
+        } => (&meshes.shot, PLAYER_SHOT_COLOR),
+        EntityKind::Shot {
+            owner: ShotOwner::Enemy,
+        } => (&meshes.shot, ENEMY_SHOT_COLOR),
+        EntityKind::Enemy => (&meshes.enemy, ENEMY_COLOR),
+    }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn document_hidden() -> bool {
-    false
+/// Dead-reckoned position for `e` given how long ago the snapshot
+/// arrived. The server's authoritative position lags by ~50 ms (one
+/// snapshot interval); rendering at `pos + vel * elapsed` masks the
+/// stair-step that the raw snapshot produces. We clamp the lookahead
+/// so packet loss or a hidden-tab pause doesn't fling sprites across
+/// the world before the next snapshot lands. X wraps with the world.
+fn extrapolated_pos(e: &EntityState, time_since_snapshot: f32) -> Vec2 {
+    // 120 ms covers two snapshot intervals — enough to ride out one
+    // missed packet without letting drift accumulate visibly.
+    const MAX_LOOKAHEAD_SECS: f32 = 0.12;
+    let t = time_since_snapshot.min(MAX_LOOKAHEAD_SECS);
+    let world_w = sim::world::WORLD_WIDTH;
+    let mut x = e.pos.x + e.vel.x * t;
+    let y = e.pos.y + e.vel.y * t;
+    x = x.rem_euclid(world_w);
+    Vec2::new(x, y)
 }
 
-/// Returns false until the user produces a gesture and the browser
-/// unlocks `AudioContext`. `play_detached` calls before that allocate a
-/// rodio sink that never gets reclaimed.
-#[cfg(target_arch = "wasm32")]
-fn audio_ready() -> bool {
-    let Some(win) = web_sys::window() else { return false; };
-    js_sys::Reflect::get(&win, &wasm_bindgen::JsValue::from_str("__icarustAudioReady"))
-        .ok()
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn audio_ready() -> bool {
-    true
-}
-
-/// Sets `window.__icarustAudioReady` on first user gesture.
-#[cfg(target_arch = "wasm32")]
-fn install_audio_ready_tracker() {
-    const JS: &str = r#"
-        if (window.__icarustAudioReadyInstalled) return;
-        window.__icarustAudioReadyInstalled = true;
-        window.__icarustAudioReady = false;
-        const mark = () => { window.__icarustAudioReady = true; };
-        const opts = { capture: true, passive: true, once: true };
-        for (const ev of ['pointerdown', 'keydown', 'touchstart', 'mousedown']) {
-            addEventListener(ev, mark, opts);
-        }
-    "#;
-    let _ = js_sys::Function::new_no_args(JS).call0(&wasm_bindgen::JsValue::NULL);
-}
-
-struct Sprites {
-    player: Sprite,
-    rock: Sprite,
-    shot: Sprite,
-}
-
-impl Sprites {
-    /// Pick the sprite + tint to draw for a given entity kind. Enemies
-    /// reuse the player sprite tinted red so we don't need a separate
-    /// asset for now.
-    fn for_kind(&self, kind: &EntityKind) -> (&Sprite, Color) {
-        use sim::entity::ShotOwner;
-        match kind {
-            EntityKind::Player { .. } => (&self.player, Color::WHITE),
-            EntityKind::Rock => (&self.rock, Color::WHITE),
-            EntityKind::Shot {
-                owner: ShotOwner::Player(_),
-            } => (&self.shot, Color::WHITE),
-            EntityKind::Shot {
-                owner: ShotOwner::Enemy,
-            } => (&self.shot, ENEMY_SHOT_TINT),
-            EntityKind::Enemy => (&self.player, ENEMY_TINT),
-        }
+/// Rough half-extent (world units) of each entity kind's mesh. Used to
+/// decide whether to draw an entity at a wrap-mirrored copy on the
+/// opposite side of the world seam. Kept generous so we never pop a
+/// sprite in late.
+fn sprite_half_extent(kind: &EntityKind) -> f32 {
+    match kind {
+        EntityKind::Player { .. } | EntityKind::Enemy => 18.0,
+        EntityKind::Rock => 12.0,
+        EntityKind::Shot { .. } => 6.0,
     }
 }
 
@@ -119,12 +102,18 @@ pub struct MainState {
     asset_manager: AssetManager,
     camera: Camera,
     net: Box<dyn Net>,
-    sprites: Sprites,
+    /// Procedurally-built mesh per entity kind. Cheaper to retint at
+    /// draw time than to reload art.
+    meshes: EntityMeshes,
+    sky: Sky,
     shot_sound_id: SoundId,
     hit_sound_id: SoundId,
     input: InputState,
     local_player_id: Option<PlayerId>,
     latest_snapshot: Option<Snapshot>,
+    /// True until we receive the first snapshot — we snap the camera
+    /// straight onto the player instead of easing in.
+    camera_initialized: bool,
     /// Monotonic counter we tag outgoing inputs with. The server doesn't yet
     /// use this for resimulation but the field shape matches what Phase 3
     /// will need.
@@ -138,12 +127,21 @@ pub struct MainState {
     game_over: bool,
     cached_score: i32,
     cached_level: i32,
+    /// Seconds since `latest_snapshot` arrived. The server snapshots at
+    /// 20 Hz but we render at ≥60 Hz, so without extrapolation entities
+    /// visibly step every 50 ms. We dead-reckon `pos + vel * elapsed`
+    /// between snapshots and reset to 0 on each new one.
+    time_since_snapshot: f32,
     /// Active particle bursts. Owned client-side; not part of the sim.
     /// Each `PlayerKilled` event spawns one.
     explosions: Vec<Explosion>,
     /// Monotonic counter used as a per-explosion RNG seed so simultaneous
     /// bursts don't render identically.
     next_explosion_seed: u64,
+    /// Flame trail behind any thrusting player.
+    thrust: ThrustEmitter,
+    /// Brown smoke streaming from damaged players.
+    smoke: DamageSmoker,
     /// Set once `net.is_connected()` first returns false, to swap the overlay
     /// text and skip the input-send loop.
     disconnected: bool,
@@ -157,11 +155,10 @@ impl MainState {
 
         let (drawable_w, drawable_h) = ctx.gfx.drawable_size();
 
-        let sprites = Sprites {
-            player: am.make_sprite(ctx, "/player.png"),
-            rock: am.make_sprite(ctx, "/rock.png"),
-            shot: am.make_sprite(ctx, "/shot.png"),
-        };
+        let meshes = EntityMeshes::build(ctx)?;
+        let world_w = sim::world::WORLD_WIDTH;
+        let world_h = sim::world::WORLD_HEIGHT;
+        let sky = Sky::build(ctx, Vec2::new(world_w, world_h), 0xC10D_C10D)?;
 
         let shot_sound_id = am.add_sound(ctx, "/pew.ogg");
         let hit_sound_id = am.add_sound(ctx, "/boom.ogg");
@@ -175,18 +172,20 @@ impl MainState {
         let mut disconnected_text = TextWidget::new(ctx, &mut am, 24.0)?;
         disconnected_text.set_text("Connecting…", 24.0);
 
-        let camera = Camera::new(drawable_w, drawable_h, VIEW_WIDTH, VIEW_HEIGHT);
+        let camera = Camera::new(drawable_w, drawable_h, world_w, world_h, VIEW_WIDTH, VIEW_HEIGHT);
 
         Ok(MainState {
             asset_manager: am,
             camera,
             net,
-            sprites,
+            meshes,
+            sky,
             shot_sound_id,
             hit_sound_id,
             input: InputState::default(),
             local_player_id: None,
             latest_snapshot: None,
+            camera_initialized: false,
             next_input_tick: Tick(0),
             gui_dirty: true,
             score_text,
@@ -199,7 +198,10 @@ impl MainState {
             cached_level: 0,
             explosions: Vec::new(),
             next_explosion_seed: 1,
+            thrust: ThrustEmitter::new(0xF1A4E_AB1u64),
+            smoke: DamageSmoker::new(0x5_E0FFEEu64),
             disconnected: false,
+            time_since_snapshot: 0.0,
         })
     }
 
@@ -212,10 +214,12 @@ impl MainState {
             } => {
                 self.local_player_id = Some(player_id);
                 self.latest_snapshot = Some(snapshot);
+                self.time_since_snapshot = 0.0;
                 self.gui_dirty = true;
             }
             ServerMsg::Snapshot(snap) => {
                 self.latest_snapshot = Some(snap);
+                self.time_since_snapshot = 0.0;
                 // If our entity is back in the world, we're alive again.
                 if self.game_over && self.local_player().is_some() {
                     self.game_over = false;
@@ -229,8 +233,11 @@ impl MainState {
     }
 
     fn play_sound(&self, ctx: &Context, id: SoundId) {
-        // Skip on wasm while AudioContext is suspended; sinks would leak.
-        if !audio_ready() {
+        // ggez's wasm `play_detached` is now a no-op while the browser
+        // `AudioContext` is suspended (so we don't leak rodio sinks), but
+        // building a `Source` still touches the filesystem and allocates,
+        // so skip the work entirely until audio is actually running.
+        if !ctx.audio.is_running() {
             return;
         }
         self.asset_manager.play_sound(ctx, id);
@@ -242,9 +249,17 @@ impl MainState {
                 GameEvent::ShotFired { .. } => {
                     self.play_sound(ctx, self.shot_sound_id);
                 }
-                GameEvent::RockKilled { .. } | GameEvent::EnemyKilled { .. } => {
+                GameEvent::RockKilled { pos, .. } | GameEvent::EnemyKilled { pos, .. } => {
+                    self.spawn_explosion(Vec2::new(pos.x, pos.y), ExplosionStyle::FieryBurst);
                     self.play_sound(ctx, self.hit_sound_id);
                     self.gui_dirty = true;
+                }
+                GameEvent::PlayerDamaged { pos, .. } => {
+                    // Small burst of smoke + a thump sound. The steady-
+                    // state smoke trail is driven from snapshot HP, but a
+                    // one-shot puff sells the impact at the right moment.
+                    self.smoke.puff_burst(Vec2::new(pos.x, pos.y), 6);
+                    self.play_sound(ctx, self.hit_sound_id);
                 }
                 GameEvent::PlayerKilled {
                     player_id,
@@ -269,6 +284,10 @@ impl MainState {
         let seed = self.next_explosion_seed;
         self.next_explosion_seed = self.next_explosion_seed.wrapping_add(1);
         self.explosions.push(Explosion::new(pos, style, seed));
+    }
+
+    fn extrapolated_pos(&self, e: &EntityState) -> Vec2 {
+        extrapolated_pos(e, self.time_since_snapshot)
     }
 
     fn local_player(&self) -> Option<&EntityState> {
@@ -330,45 +349,71 @@ impl MainState {
         ));
     }
 
-    /// Draw an entity at every visible toroidal copy. Only X wraps —
-    /// Y is a hard wall in the sim — so we just need to draw extras on
-    /// the opposite horizontal edge when an entity is within a sprite-
-    /// half of one.
+    /// Draw an entity at every visible toroidal copy. Only X wraps — Y
+    /// is a hard wall in the sim — so we ask the camera for the up-to-
+    /// three candidate X positions that land inside the viewport.
     fn draw_entity(&self, canvas: &mut Canvas, entity: &EntityState) {
-        let view = self.camera.view_size();
-        let (sprite, tint) = self.sprites.for_kind(&entity.kind);
-        // Sprite half-extent in world units (sprites are scaled by
-        // camera.scale on draw, so the source pixel size already covers
-        // a `sprite_pixels / scale` world-unit disc).
-        let half_world = sprite.half_width().max(sprite.half_height()) / self.camera.scale();
-        let pos = Vec2::new(entity.pos.x, entity.pos.y);
-
-        for dx in [-1.0, 0.0, 1.0] {
-            let p = Vec2::new(pos.x + dx * view.x, pos.y);
-            if p.x < -half_world || p.x > view.x + half_world {
-                continue;
-            }
-            self.draw_entity_at(canvas, entity, p, sprite, tint);
+        let (mesh, tint) = mesh_for_kind(&self.meshes, &entity.kind);
+        let half = sprite_half_extent(&entity.kind);
+        let scale = self.camera.scale();
+        let pos = self.extrapolated_pos(entity);
+        for cand in self
+            .camera
+            .world_x_offsets_for(pos.x, half)
+            .into_iter()
+            .flatten()
+        {
+            let screen = self.camera.world_to_screen(Vec2::new(cand, pos.y));
+            let params = DrawParam::new()
+                .dest(screen)
+                .rotation(entity.facing)
+                .scale([scale, scale])
+                .color(tint);
+            canvas.draw(mesh, params);
         }
     }
 
-    fn draw_entity_at(
-        &self,
-        canvas: &mut Canvas,
-        entity: &EntityState,
-        world_pos: Vec2,
-        sprite: &Sprite,
-        tint: Color,
-    ) {
-        let screen = self.camera.world_to_screen(world_pos);
-        let scale = self.camera.scale();
-        let drawparams = DrawParam::new()
-            .dest(screen)
-            .rotation(entity.facing)
-            .scale([scale, scale])
-            .offset(Point2::new(0.5, 0.5))
-            .color(tint);
-        canvas.draw(&sprite.image, drawparams);
+    /// HP bar pinned to the top-left, just under the score/level text. Shows
+    /// only when the local player has a meaningful HP — i.e. they're alive
+    /// and the snapshot carries a max_hp > 0.
+    fn draw_hp_bar(&self, canvas: &mut Canvas, hp: i16, max_hp: i16) {
+        let bar_w: f32 = 200.0;
+        let bar_h: f32 = 10.0;
+        let x: f32 = 10.0;
+        let y: f32 = 36.0;
+        // Background — semi-translucent dark plate so the bar reads
+        // against any sky color.
+        canvas.draw(
+            &graphics::Quad,
+            DrawParam::new()
+                .dest(Vec2::new(x - 1.0, y - 1.0))
+                .scale([bar_w + 2.0, bar_h + 2.0])
+                .color(Color::new(0.20, 0.10, 0.12, 0.75)),
+        );
+        canvas.draw(
+            &graphics::Quad,
+            DrawParam::new()
+                .dest(Vec2::new(x, y))
+                .scale([bar_w, bar_h])
+                .color(Color::new(0.32, 0.22, 0.20, 1.0)),
+        );
+        let frac = (hp as f32 / max_hp as f32).clamp(0.0, 1.0);
+        let fill_w = bar_w * frac;
+        // Color shifts from green-ish at full to red as you take hits.
+        let fill = if frac > 0.5 {
+            Color::new(0.55, 0.78, 0.40, 1.0)
+        } else if frac > 0.25 {
+            Color::new(0.95, 0.78, 0.32, 1.0)
+        } else {
+            Color::new(0.92, 0.30, 0.28, 1.0)
+        };
+        canvas.draw(
+            &graphics::Quad,
+            DrawParam::new()
+                .dest(Vec2::new(x, y))
+                .scale([fill_w, bar_h])
+                .color(fill),
+        );
     }
 }
 
@@ -381,7 +426,7 @@ impl EventHandler for MainState {
         // Skip everything while hidden — playing audio for queued events
         // leaks rodio sinks on wasm. Drain residual dt so unhiding doesn't
         // fire thousands of catch-up input ticks.
-        if document_hidden() {
+        if !ctx.gfx.is_page_visible() {
             while ctx.time.check_update_time(DESIRED_FPS) {}
             return Ok(());
         }
@@ -433,10 +478,66 @@ impl EventHandler for MainState {
         // Step active explosions on real elapsed time so they look the
         // same regardless of the fixed-step input cadence.
         let dt = ctx.time.delta().as_secs_f32();
+        self.time_since_snapshot += dt;
         for ex in &mut self.explosions {
             ex.update(dt);
         }
         self.explosions.retain(|e| !e.done());
+
+        // Drive camera + particle systems from the latest snapshot. The
+        // camera tracks the local player horizontally; particle emitters
+        // read `thrusting` / `hp` directly from the snapshot so a freshly-
+        // taken hit shows smoke before the next event arrives. Take()ing
+        // the snapshot lets us pass &self to extrapolated_pos while also
+        // mutating self.{camera,thrust,smoke}; we put it back before
+        // returning so subsequent reads still see the latest state. Cheap
+        // — Option::take/replace just moves the snapshot, no clone.
+        let time_since_snapshot = self.time_since_snapshot;
+        if let Some(snap) = self.latest_snapshot.take() {
+            // Local player drives the camera. Snap on first frame, ease
+            // afterwards.
+            let local = self.local_player_id.and_then(|pid| {
+                snap.entities.iter().find(|e| match e.kind {
+                    EntityKind::Player { player_id } => player_id == pid && e.alive,
+                    _ => false,
+                })
+            });
+            if let Some(p) = local {
+                let target = extrapolated_pos(p, time_since_snapshot);
+                if !self.camera_initialized {
+                    self.camera.snap_to(target);
+                    self.camera_initialized = true;
+                } else {
+                    self.camera.follow(target, dt * CAMERA_FOLLOW_RATE);
+                }
+            }
+            // Pump every player's thrust/smoke emitters every frame so
+            // they stop cleanly when the ship dies or the flag flips.
+            for e in &snap.entities {
+                let EntityKind::Player { .. } = e.kind else {
+                    continue;
+                };
+                if !e.alive {
+                    continue;
+                }
+                let pos = extrapolated_pos(e, time_since_snapshot);
+                self.thrust.note_thrust(e.id, pos, e.facing, dt, e.thrusting);
+                self.smoke.note_health(e.id, pos, e.hp, e.max_hp, dt);
+            }
+            // Forget particles for entities not in the snapshot. Linear
+            // scan over the (small) entity list beats allocating a HashSet
+            // every frame for typical entity counts.
+            let entities = &snap.entities;
+            self.thrust
+                .retain_ids(|id| entities.iter().any(|e| e.id == id));
+            self.smoke
+                .retain_ids(|id| entities.iter().any(|e| e.id == id));
+            self.latest_snapshot = Some(snap);
+        }
+        self.thrust.update(dt);
+        self.smoke.update(dt);
+        let world_size = Vec2::new(sim::world::WORLD_WIDTH, sim::world::WORLD_HEIGHT);
+        self.sky.update(dt, world_size);
 
         let snap_score = self
             .latest_snapshot
@@ -460,14 +561,21 @@ impl EventHandler for MainState {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        if document_hidden() {
+        if !ctx.gfx.is_page_visible() {
             return Ok(());
         }
-        let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
+        let mut canvas = graphics::Canvas::from_frame(ctx, SKY_COLOR);
 
         if let Some(snap) = &self.latest_snapshot {
-            // Terrain underneath everything.
+            // Background: cream sky + parallax clouds, behind everything.
+            self.sky.draw(&mut canvas, &self.camera);
+
+            // Terrain underneath the play layer.
             render::terrain::draw(&mut canvas, &self.camera, &snap.terrain);
+
+            // Thrust trails behind ships (drawn before the ships so the
+            // flame appears to come out of the tail rather than over it).
+            self.thrust.draw(&mut canvas, &self.camera);
 
             for entity in &snap.entities {
                 if !entity.alive {
@@ -476,15 +584,20 @@ impl EventHandler for MainState {
                 self.draw_entity(&mut canvas, entity);
             }
 
-            // Explosions render on top of entities so a fresh boom is
-            // visible even while the doomed sprite is still being drawn
-            // by the same snapshot.
+            // Damage smoke on top of ships so torn-up hulls smolder
+            // visibly, then explosions on top of everything.
+            self.smoke.draw(&mut canvas, &self.camera);
             for ex in &self.explosions {
                 ex.draw(&mut canvas, &self.camera);
             }
 
             self.level_text.draw(&mut canvas);
             self.score_text.draw(&mut canvas);
+            if let Some(p) = self.local_player() {
+                if p.alive && p.max_hp > 0 {
+                    self.draw_hp_bar(&mut canvas, p.hp, p.max_hp);
+                }
+            }
             if self.game_over {
                 self.game_over_text.draw(&mut canvas);
                 self.restart_hint_text.draw(&mut canvas);
@@ -519,9 +632,8 @@ impl EventHandler for MainState {
 }
 
 /// Build a ggez `ContextBuilder` configured the way Icarust wants it. The
-/// caller drives the actual context construction: native uses `build()`
-/// (sync via `pollster::block_on`), wasm uses `build_async().await` from
-/// inside `wasm_bindgen_futures::spawn_local` because WebGPU init is async.
+/// caller drives the actual context construction via
+/// [`ContextBuilder::custom_run`], which abstracts over the native/web split.
 pub fn build_ggez(resource_dir: Option<std::path::PathBuf>) -> ContextBuilder {
     let window_setup = conf::WindowSetup::default()
         .title("Icarust")
@@ -579,9 +691,9 @@ pub fn native_main() -> GameResult {
     };
     tracing::info!(resource_dir = %resource_dir.display(), "mounting resources");
 
-    let (mut ctx, events_loop) = build_ggez(Some(resource_dir)).build()?;
-    let game = MainState::new(&mut ctx, net)?;
-    event::run(ctx, events_loop, game)
+    // `run_with` lets us capture `net` in the state-builder closure — the
+    // plain `run::<G>()` path only passes `&mut Context` to `Game::new`.
+    build_ggez(Some(resource_dir)).run_with(move |ctx| MainState::new(ctx, net))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -612,48 +724,68 @@ fn parse_args() -> (String, String) {
 /// Wasm entry point. wasm-bindgen calls this as the module's `start` hook
 /// when `init()` is awaited in JS. Reads connection params from
 /// `window.location.search` (`?server=ws://…&name=…`), wires up a
-/// `WebSocket`-backed `Net`, and hands control to the ggez event loop.
-///
-/// WebGPU adapter/device init resolves only after the JS event loop runs,
-/// so context construction is awaited inside `spawn_local`. `wasm_start`
-/// itself returns immediately so wasm-bindgen's `init()` promise resolves.
+/// `WebSocket`-backed `Net`, and delegates to `ContextBuilder::run_with`,
+/// which on wasm spawns the async build/state setup onto the JS event loop
+/// and returns immediately.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
     use crate::net::WebNet;
 
     console_error_panic_hook::set_once();
-    let _ = tracing_wasm::try_set_as_global_default();
-    install_audio_ready_tracker();
+    // tracing-wasm defaults to `report_logs_in_timings: true`, which calls
+    // `performance.mark()` + `performance.measure()` for every span — the
+    // browser then retains those PerformanceMark/Measure entries forever
+    // (no rotation), leaking ~70KB/sec while the game is running. Disable
+    // the timings path; we still get console.log output.
+    let mut tracing_cfg = tracing_wasm::WASMLayerConfigBuilder::new();
+    tracing_cfg.set_report_logs_in_timings(false);
+    tracing_cfg.set_max_level(tracing::Level::INFO);
+    tracing_wasm::set_as_global_default_with_config(tracing_cfg.build());
+
+    // ggez's WebGpuUnavailable error gets swallowed inside `run_with` (it
+    // only goes to console.error), so catch the most common cause —
+    // `navigator.gpu` missing entirely — up front and put a readable note
+    // in the page's status banner.
+    if !webgpu_available() {
+        show_init_error(
+            "Your browser doesn't expose WebGPU. \
+             Try Chrome with `chrome://flags/#enable-unsafe-webgpu`, \
+             or Firefox Nightly with `dom.webgpu.enabled`.",
+        );
+        return Ok(());
+    }
 
     let (url, name) = wasm_parse_args();
     tracing::info!(%url, %name, "connecting");
     let net = WebNet::connect(&url, name)
         .map_err(|e| wasm_bindgen::JsValue::from_str(&format!("WebNet::connect: {e:#}")))?;
 
-    let cb = build_ggez(None);
-    wasm_bindgen_futures::spawn_local(async move {
-        let (mut ctx, events_loop) = match cb.build_async().await {
-            Ok(x) => x,
-            Err(e) => {
-                web_sys::console::error_1(&format!("ggez build_async: {e}").into());
-                return;
-            }
-        };
-        let game = match MainState::new(&mut ctx, Box::new(net)) {
-            Ok(g) => g,
-            Err(e) => {
-                web_sys::console::error_1(&format!("MainState::new: {e}").into());
-                return;
-            }
-        };
-        // `event::run` on wasm uses `EventLoopExtWebSys::spawn_app` and
-        // returns immediately; JS keeps driving the loop.
-        if let Err(e) = event::run(ctx, events_loop, game) {
-            web_sys::console::error_1(&format!("event::run: {e}").into());
-        }
-    });
+    let _ = build_ggez(None).run_with(move |ctx| MainState::new(ctx, Box::new(net) as Box<dyn Net>));
     Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn webgpu_available() -> bool {
+    web_sys::window()
+        .map(|w| {
+            let nav = w.navigator();
+            !js_sys::Reflect::get(&nav, &wasm_bindgen::JsValue::from_str("gpu"))
+                .map(|v| v.is_undefined() || v.is_null())
+                .unwrap_or(true)
+        })
+        .unwrap_or(false)
+}
+
+/// Write a fallback message into `#status` (the boot banner in index.html) so
+/// init failures are visible without opening devtools.
+#[cfg(target_arch = "wasm32")]
+fn show_init_error(msg: &str) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if let Some(el) = doc.get_element_by_id("status") {
+            el.set_text_content(Some(msg));
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

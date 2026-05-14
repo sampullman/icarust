@@ -27,6 +27,15 @@ use super::Net;
 /// ~1s of server traffic; old messages drop on overflow.
 const MAX_RX_QUEUE: usize = 128;
 
+/// Check `document.hidden` without panicking if `window`/`document` are
+/// somehow gone. Cheap: a couple of JS calls per WebSocket frame.
+fn document_hidden() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .map(|d| d.hidden())
+        .unwrap_or(false)
+}
+
 /// Inner state, shared between the `WebNet` handle and the JS callbacks
 /// installed on the socket. Kept in a `Rc<RefCell<_>>` because callbacks
 /// outlive any single function and JS hands control back to us on its own
@@ -86,9 +95,16 @@ impl WebNet {
         ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
 
         // onmessage: decode the binary payload into a ServerMsg and push it
-        // into the queue. Text frames and other types are ignored.
+        // into the queue. Text frames and other types are ignored. While the
+        // tab is hidden we still drain the network frame (so the browser
+        // doesn't buffer it indefinitely on its side), but skip the decode
+        // + allocations entirely — `update` won't process queued messages
+        // anyway, and on un-hide we just resync to the next snapshot.
         let inner_msg = inner.clone();
         let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |evt: MessageEvent| {
+            if document_hidden() {
+                return;
+            }
             let data = evt.data();
             // We requested ArrayBuffer above; anything else means the server
             // is doing something unexpected.

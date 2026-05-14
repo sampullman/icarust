@@ -3,6 +3,13 @@
 // then dynamically imports the wasm-bindgen JS shim and awaits its
 // default-exported `init()` call.
 
+// Must run before the wasm import: wasm-bindgen captures `AudioContext` at
+// module load, so rodio's context (created during wasm init) only inherits
+// our subclass if the patch is in place beforehand. The subclass mirrors
+// `AudioContext.state` onto `window.__ggezAudioState` so ggez's Rust-side
+// `AudioContext::state()` / `is_running()` returns accurate values.
+installGgezAudioUnlock();
+
 const status = document.getElementById('status');
 function setStatus(msg) {
   if (status) status.textContent = msg;
@@ -19,6 +26,30 @@ async function preloadResourcesZip() {
   } catch (err) {
     console.warn('failed to preload resources.zip:', err);
   }
+}
+
+// See note above `installGgezAudioUnlock()` for why this lives in JS.
+function installGgezAudioUnlock() {
+  if (window.__ggezAudioUnlockInstalled) return;
+  window.__ggezAudioUnlockInstalled = true;
+  const Original = window.AudioContext || window.webkitAudioContext;
+  if (!Original) return;
+  class GgezUnlockingAudioContext extends Original {
+    constructor() {
+      super(...arguments);
+      const sync = () => { window.__ggezAudioState = this.state; };
+      sync();
+      this.addEventListener('statechange', sync);
+      if (this.state !== 'suspended') return;
+      const unlock = () => { this.resume().catch(() => {}); };
+      const opts = { capture: true, passive: true, once: true };
+      for (const ev of ['pointerdown', 'keydown', 'touchstart', 'mousedown']) {
+        addEventListener(ev, unlock, opts);
+      }
+    }
+  }
+  window.AudioContext = GgezUnlockingAudioContext;
+  if (window.webkitAudioContext) window.webkitAudioContext = GgezUnlockingAudioContext;
 }
 
 try {
@@ -45,7 +76,12 @@ try {
   // instantiates the wasm and (because we use `#[wasm_bindgen(start)]`) runs
   // `wasm_start` which builds the ggez context and hands control to the
   // browser-driven event loop.
-  await mod.default();
+  const inst = await mod.default();
+  // Expose the WebAssembly.Memory backing the wasm linear heap so test
+  // harnesses can measure growth (it's otherwise captured inside the
+  // module-private `wasm` variable inside client.js). Only used by
+  // web/test-headless-mem.mjs — harmless in production.
+  if (inst && inst.memory) window.__icarustWasmMemory = inst.memory;
   setStatus('');
 } catch (err) {
   console.error(err);

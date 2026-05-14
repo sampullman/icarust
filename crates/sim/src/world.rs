@@ -8,11 +8,19 @@ use crate::enemy::{self, ENEMY_SHOT_SPEED, ENEMY_SHOT_TIME};
 use crate::event::{DeathCause, GameEvent};
 use crate::input::PlayerInputs;
 use crate::physics;
-use crate::player::{self, PLAYER_SHOT_TIME, SHOT_SPEED};
+use crate::player::{
+    self, PLAYER_REGEN_DELAY, PLAYER_REGEN_INTERVAL, PLAYER_SHOT_TIME, SHOT_SPEED,
+};
 use crate::terrain::{self, TerrainBand};
 use crate::util::{self, Vec2};
 
-pub const WORLD_WIDTH: f32 = 1280.0;
+/// World is wider than the visible viewport so the camera can scroll
+/// instead of wrapping at the screen edge. The X axis is still toroidal
+/// (sim::util::wrap_coord) — entities that fly off the right reappear on
+/// the left — but the client camera follows the local player and draws
+/// each entity in up to three positions (`x`, `x ± WORLD_WIDTH`) so the
+/// wrap is invisible from the player's perspective.
+pub const WORLD_WIDTH: f32 = 3200.0;
 pub const WORLD_HEIGHT: f32 = 540.0;
 
 pub const ROCK_BBOX: f32 = 12.0;
@@ -197,6 +205,7 @@ impl World {
             let (vel, facing) = player::apply_input(entity.vel, entity.facing, &input, dt);
             entity.vel = vel;
             entity.facing = facing;
+            entity.thrusting = input.yaxis > 0.0;
 
             entity.shot_cooldown -= dt;
 
@@ -308,6 +317,9 @@ impl World {
 
         // 3. Collisions. Iteration is over BTreeMap so order is deterministic.
         self.handle_collisions(&mut events);
+
+        // 3b. HP regen for live players.
+        self.handle_regen(dt);
 
         // 4. Clear dead. Track player removals for housekeeping.
         let mut removed_players: Vec<PlayerId> = Vec::new();
@@ -536,7 +548,9 @@ impl World {
             }
         }
 
-        // Enemy shot ↔ player: shot dies, player dies.
+        // Enemy shot ↔ player: shot dies; player loses one HP and only
+        // dies when HP hits zero. Repeat hits within `PLAYER_REGEN_DELAY`
+        // stack, so a focused volley will still drop the pilot.
         for shot_id in &enemy_shot_ids {
             for player_id in &player_ids {
                 let hit = match (self.entities.get(shot_id), self.entities.get(player_id)) {
@@ -552,39 +566,77 @@ impl World {
                     Some(EntityKind::Player { player_id }) => player_id,
                     _ => continue,
                 };
-                let pos = self.entities.get(player_id).map(|p| p.pos).unwrap_or(Vec2::ZERO);
                 if let Some(s) = self.entities.get_mut(shot_id) {
                     s.alive = false;
                 }
-                if let Some(p) = self.entities.get_mut(player_id) {
+                let Some(p) = self.entities.get_mut(player_id) else {
+                    continue;
+                };
+                p.hp -= 1;
+                p.damage_timer = 0.0;
+                let pos = p.pos;
+                if p.hp <= 0 {
                     p.alive = false;
+                    events.push(GameEvent::PlayerKilled {
+                        player_id: pid,
+                        pos,
+                        cause: DeathCause::EnemyShot,
+                    });
+                } else {
+                    events.push(GameEvent::PlayerDamaged {
+                        player_id: pid,
+                        pos,
+                        hp: p.hp,
+                    });
                 }
-                events.push(GameEvent::PlayerKilled {
-                    player_id: pid,
-                    pos,
-                    cause: DeathCause::EnemyShot,
-                });
                 break;
             }
         }
     }
 
-    /// Spawn one enemy somewhere along the top half of the world, well
-    /// away from the player spawn point. Position is drawn from the world
-    /// RNG so this is deterministic.
+    /// Tick the regen clock on every live player. After `PLAYER_REGEN_DELAY`
+    /// of damage-free flight, HP starts climbing back at one tick every
+    /// `PLAYER_REGEN_INTERVAL` seconds. Called once per world tick.
+    fn handle_regen(&mut self, dt: f32) {
+        for entity in self.entities.values_mut() {
+            if !entity.alive {
+                continue;
+            }
+            if !matches!(entity.kind, EntityKind::Player { .. }) {
+                continue;
+            }
+            entity.damage_timer += dt;
+            if entity.hp >= entity.max_hp {
+                continue;
+            }
+            // Pay out one HP every REGEN_INTERVAL seconds past the delay.
+            if entity.damage_timer >= PLAYER_REGEN_DELAY + PLAYER_REGEN_INTERVAL {
+                entity.hp = (entity.hp + 1).min(entity.max_hp);
+                entity.damage_timer -= PLAYER_REGEN_INTERVAL;
+            }
+        }
+    }
+
+    /// Spawn one enemy well outside the player's view so it flies in from
+    /// off-screen rather than appearing on top of them. With the wide
+    /// scrolling world, a horizontal offset of one viewport-and-change is
+    /// plenty: the client view is ~1280 wide centered on the player, so
+    /// the enemy starts ~800–1100 units to the side. Picked from the
+    /// world RNG so it's deterministic.
     fn spawn_enemy(&mut self) {
         let world = self.config.world_size;
         let center = world * 0.5;
-        // Pick a random angle in the upper half-plane (between 30° and
-        // 150° measuring from +X) so the enemy starts above the play area
-        // rather than sitting next to the player.
-        let span = std::f32::consts::PI * (2.0 / 3.0);
-        let base = std::f32::consts::PI / 6.0;
-        let angle = base + util::rand_unit(&mut self.rng) * span;
-        let radius = world.y * 0.4;
-        let mut pos = center + Vec2::new(angle.cos(), angle.sin()) * radius;
+        // Horizontal: one side or the other, far enough out that the enemy
+        // is off-camera even after the player drifts.
+        let side = if util::rand_unit(&mut self.rng) < 0.5 { -1.0 } else { 1.0 };
+        let span_x = util::rand_unit(&mut self.rng) * 350.0;
+        let off_x = side * (800.0 + span_x);
+        // Vertical: somewhere in the upper half so the enemy approaches
+        // from above the play area. Y-up world coords, so larger y == higher.
+        let off_y = util::rand_unit(&mut self.rng) * world.y * 0.3;
+        let mut pos = center + Vec2::new(off_x, off_y);
         pos.x = util::wrap_coord(pos.x, world.x);
-        pos.y = pos.y.clamp(20.0, world.y - 20.0);
+        pos.y = pos.y.clamp(40.0, world.y - 40.0);
         let id = self.alloc_id();
         let enemy = Entity::enemy(id, pos);
         self.entities.insert(id, enemy);
