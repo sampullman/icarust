@@ -2,16 +2,16 @@
 
 A 2D Sopwith/Luftrauser-style shoot-'em-up written in Rust on top of [ggez](https://github.com/ggez/ggez). The player flies a thrust-vector ship with gravity, wraps horizontally, and shoots rocks for points; clearing a level spawns more.
 
-The codebase has been split into a deterministic, server-authoritative client/server architecture. See `server-architecture.md` for the full migration plan and `PHASE_1_2_RECAP.md` for the current state. Phases 1 (sim extraction) and 2 (native server + protocol) are complete; phase 3 (snapshot interpolation, event-driven audio polish) is not. Phase 4 (wasm client) has a working preview — see `## Web build` below.
+The codebase has been split into a deterministic, server-authoritative client/server architecture. See `server-architecture.md` for the full migration plan.
 
 ## Run / build
 
 ```
-cargo run -p server                                # binds 127.0.0.1:6363
-cargo run -p client                                # connects to ws://127.0.0.1:6363
-cargo run -p client -- --connect ws://host:6363 --name alice
-ICARUST_LISTEN=0.0.0.0:6363 cargo run -p server    # alt listen addr
-ICARUST_SERVER=ws://host:6363 cargo run -p client  # alt server URL
+cargo run -p server                                # binds 127.0.0.1:4015
+cargo run -p client                                # connects to ws://127.0.0.1:4015
+cargo run -p client -- --connect ws://host:4015 --name alice
+ICARUST_LISTEN=0.0.0.0:4015 cargo run -p server    # alt listen addr
+ICARUST_SERVER=ws://host:4015 cargo run -p client  # alt server URL
 cargo check                                         # fast workspace type-check
 cargo test                                          # all crates
 ```
@@ -28,7 +28,7 @@ cargo install --locked --version 0.2.120 wasm-bindgen-cli   # match Cargo.lock
 cd web && npm install
 npm run build                # debug wasm + wasm-bindgen + resources.zip
 npm run build:release        # release wasm (recommended for actual play)
-npm run serve                # vite at http://localhost:5173
+npm run serve                # vite at http://localhost:4010 (strictPort)
 npm run dev                  # build + serve in one shot
 ```
 
@@ -41,7 +41,7 @@ The runner dodges a Vite quirk: dynamic imports of JS files under `publicDir` ar
 
 **Vite stale-public gotcha:** rebuilding while `vite` is running will cause it to serve the SPA fallback HTML for the new files. Kill and restart vite after every `build.mjs` run.
 
-The wasm client reads `?server=ws://host:6363&name=alice` from `location.search`; defaults are `ws://<page-hostname>:6363` and `pilot`.
+The wasm client reads `?server=ws://host:4015&name=alice` from `location.search`; defaults are `ws://<page-hostname>:4015` (or `wss://` when the page is https) and `pilot`. The scheme follows `location.protocol` so an https-terminating proxy like nginx works without query params — note that only port 4015 forwards WebSocket upgrades in the local nginx setup.
 
 ## Verifying the wasm build in a headless browser
 
@@ -51,7 +51,7 @@ Loop:
 
 1. Start the server: `cargo run -p server` (in the background, or in another shell).
 2. Build the wasm bundle: `cd web && npm run build` (or `build:release`).
-3. Serve it: `npm run serve`. Note the port — vite picks the next free one if 5173 is taken. Remember the stale-public gotcha above and restart vite after each rebuild.
+3. Serve it: `npm run serve`. Vite binds 4010 with `strictPort: true`, so it'll fail loudly instead of silently sliding to another port. Remember the stale-public gotcha above and restart vite after each rebuild.
 4. Drive it with `web/test-headless.mjs`, a small Playwright runner that launches Chromium with the flags Linux needs to expose a WebGPU adapter (`--enable-unsafe-webgpu --enable-features=Vulkan --use-angle=vulkan --disable-vulkan-fallback-to-gl-for-testing --ignore-gpu-blocklist`). Read the file if you need to tweak it.
 
 Run it: `node web/test-headless.mjs http://127.0.0.1:<port>/ /tmp/icarust.png`. If `playwright` isn't already in `web/node_modules`, install it once: `cd web && npm i -D playwright && npx playwright install chromium`. Increase `WAIT_MS` (env var) for slow first-frame paths; the runner defaults to 6000 ms.
@@ -99,7 +99,7 @@ src/
 
 ### `crates/protocol`
 
-`ClientMsg::{Hello, Input{tick, input}, Bye}`, `ServerMsg::{Welcome{player_id, seed, world_size, snapshot}, Snapshot, Events{tick, events}}`, plus `Snapshot { tick, entities: Vec<EntityState>, score_by_player, level }`. Encoded with `postcard` and shipped as binary WebSocket frames. `DEFAULT_ADDR = "127.0.0.1:6363"`. `snapshot_from_world(&World)` is the server-side helper.
+`ClientMsg::{Hello, Input{tick, input}, Bye}`, `ServerMsg::{Welcome{player_id, seed, world_size, snapshot}, Snapshot, Events{tick, events}}`, plus `Snapshot { tick, entities: Vec<EntityState>, score_by_player, level }`. Encoded with `postcard` and shipped as binary WebSocket frames. `DEFAULT_ADDR = "127.0.0.1:4015"`. `snapshot_from_world(&World)` is the server-side helper.
 
 ### `crates/server`
 
@@ -167,3 +167,8 @@ Left / Right rotate, Up thrusts, Space fires, Escape quits. (R is currently iner
 
 - `sim` unit tests: `physics::circles_overlap`, `util::vec_from_angle` / `clamp_velocity`, the `player::apply_input` / `apply_forces` step (thrust direction, "1 s of held thrust climbs > 50 px," velocity clamp), and `world` tests including `determinism_replay_matches_hash` — the CI gate that asserts `(seed, inputs)` produces a stable entity-state hash and that a different seed diverges.
 - `server` integration test (`tests/handshake.rs`): binds `127.0.0.1:0`, drives a fake WebSocket client through `Hello → Welcome → Input(fire) → Events/Snapshot`.
+
+## Style
+
+- Comments should be concise and only describe what/why if existing code, limit historical observations. Extend comments to ~90 line width.
+- Don't worry about breaking interfaces, always refactor when there is a clear opportunity for code improvement/cleanliness.

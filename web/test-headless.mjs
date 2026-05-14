@@ -7,7 +7,7 @@
 // ourselves with the flags Linux needs to wire WebGPU through Vulkan/ANGLE.
 //
 // Usage: node web/test-headless.mjs [URL] [SCREENSHOT_PATH]
-//   URL              defaults to http://127.0.0.1:5173/
+//   URL              defaults to http://127.0.0.1:4010/
 //   SCREENSHOT_PATH  defaults to /tmp/icarust.png
 //   WAIT_MS env var  defaults to 6000 — bump for slow first-frame paths.
 //
@@ -16,7 +16,7 @@
 
 import { chromium } from 'playwright';
 
-const URL = process.argv[2] ?? 'http://127.0.0.1:5173/';
+const URL = process.argv[2] ?? 'http://127.0.0.1:4010/';
 const OUT = process.argv[3] ?? '/tmp/icarust.png';
 const WAIT_MS = Number(process.env.WAIT_MS ?? '6000');
 

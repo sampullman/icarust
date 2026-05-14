@@ -561,7 +561,7 @@ pub fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
 
 #[cfg(target_arch = "wasm32")]
 fn wasm_parse_args() -> (String, String) {
-    let default_url = "ws://127.0.0.1:6363".to_string();
+    let default_url = "ws://127.0.0.1:4015".to_string();
     let default_name = "pilot".to_string();
 
     let Some(window) = web_sys::window() else {
@@ -576,11 +576,16 @@ fn wasm_parse_args() -> (String, String) {
     };
 
     let url = params.get("server").unwrap_or_else(|| {
-        // Default to ws on same host as the page, port 6363. Lets you serve
-        // the static bundle and the game server side-by-side without
-        // passing a query string.
-        let host = window.location().hostname().unwrap_or_else(|_| "127.0.0.1".into());
-        format!("ws://{host}:6363")
+        // Default to same host as the page, port 4015. Use wss when the
+        // page is https so a TLS-terminating proxy (e.g. nginx) works
+        // without requiring a query string.
+        let loc = window.location();
+        let host = loc.hostname().unwrap_or_else(|_| "127.0.0.1".into());
+        let scheme = match loc.protocol().as_deref() {
+            Ok("https:") => "wss",
+            _ => "ws",
+        };
+        format!("{scheme}://{host}:4015")
     });
     let url = if url.is_empty() { default_url } else { url };
     let name = params.get("name").unwrap_or(default_name);

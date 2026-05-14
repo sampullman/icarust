@@ -1,5 +1,5 @@
-//! Simple chase-and-fire enemy AI. Picks the nearest live player, steers
-//! its facing toward them, thrusts when roughly aligned, and fires when
+//! Simple chase-and-fire enemy AI. Picks the nearest live player, faces them,
+//! thrusts when roughly aligned, and fires when
 //! aligned and within range. No gravity — enemies cruise around like
 //! drones, not like the player ship.
 //!
@@ -137,7 +137,14 @@ mod tests {
 
     #[test]
     fn idles_when_no_target() {
-        let s = step(Vec2::new(100.0, 100.0), Vec2::new(20.0, 0.0), 0.0, None, 1280.0, 1.0 / 60.0);
+        let s = step(
+            Vec2::new(100.0, 100.0),
+            Vec2::new(20.0, 0.0),
+            0.0,
+            None,
+            1280.0,
+            1.0 / 60.0,
+        );
         assert!(!s.fire);
         // Drag should reduce speed, not increase it.
         assert!(s.vel.length() < 20.0);

@@ -1,8 +1,7 @@
 //! Wire protocol between Icarust client and server.
 //!
-//! Encodes with `postcard` (compact, no_std-friendly). Messages are framed
-//! as binary WebSocket frames; each frame holds exactly one
-//! [`ClientMsg`] or [`ServerMsg`].
+//! Encodes with `postcard` (compact, no_std-friendly). Messages are binary
+//! WebSocket frames; each frame holds exactly one [`ClientMsg`] or [`ServerMsg`].
 
 use serde::{Deserialize, Serialize};
 use sim::entity::{EntityId, EntityKind, PlayerId, Tick};
@@ -12,12 +11,17 @@ use sim::{GameEvent, PlayerInput};
 
 /// Default WebSocket address the server listens on and the client connects
 /// to. Override with `ICARUST_SERVER` or a CLI flag in the client.
-pub const DEFAULT_ADDR: &str = "127.0.0.1:6363";
+pub const DEFAULT_ADDR: &str = "127.0.0.1:4015";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMsg {
-    Hello { name: String },
-    Input { tick: Tick, input: PlayerInput },
+    Hello {
+        name: String,
+    },
+    Input {
+        tick: Tick,
+        input: PlayerInput,
+    },
     Bye,
     /// Ask the server to put the player back in the world after dying.
     Respawn,
