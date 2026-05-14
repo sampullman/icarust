@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 
+[lib]
+path = "src/lib.rs"
+# `cdylib` produces the .wasm we run through wasm-bindgen on the web target.
+# `rlib` keeps the lib usable from the native bin too.
+crate-type = ["cdylib", "rlib"]
+
 [[bin]]
 name = "icarust-client"
 path = "src/main.rs"
@@ -18,7 +24,38 @@ rand = { workspace = true }
 rand_chacha = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+# Native-only: tokio + tracing-subscriber pull in things that won't compile to
+# wasm32 (mio, real threads, etc). The net trait gates the impls behind cfg.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
+
+# Wasm-only deps. ggez itself enables web-sys/wasm-bindgen for wasm32; we just
+# need the bits for our own WebSocket Net impl + the JS entrypoint.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+tracing-wasm = "0.2"
+getrandom = { version = "0.2", features = ["js"] }
+web-sys = { version = "0.3", features = [
+    "BinaryType",
+    "Blob",
+    "CloseEvent",
+    "ErrorEvent",
+    "Event",
+    "Location",
+    "MessageEvent",
+    "Url",
+    "UrlSearchParams",
+    "WebSocket",
+    "Window",
+    "console",
+] }
+
+[features]
+default = []

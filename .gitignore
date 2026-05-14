@@ -10,3 +10,11 @@ Cargo.lock
 .DS_Store
 desktop.ini
 *~
+
+# Web build artifacts
+/web/node_modules/
+/web/public/client/
+/web/public/resources/
+/web/public/resources.zip
+
+.playwright-mcp/

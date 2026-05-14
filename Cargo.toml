@@ -20,6 +20,6 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-ggez = { git = "https://github.com/ggez/ggez", rev = "f066eec5434628d50791838f668e94972776a1ad" }
+ggez = { git = "https://github.com/ggez/ggez", rev = "62af01d505ce6221fe257a3df2a20b2da02d9e87" }
 sim = { path = "crates/sim" }
 protocol = { path = "crates/protocol" }
