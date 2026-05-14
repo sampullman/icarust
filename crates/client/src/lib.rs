@@ -41,6 +41,54 @@ fn print_instructions() {
     tracing::info!("Controls: Left/Right rotate, Up thrust, Space fire, R restart, Esc quit");
 }
 
+/// Hidden tabs throttle rAF but keep firing `onmessage` and would
+/// otherwise leak audio sinks. Always false on native.
+#[cfg(target_arch = "wasm32")]
+fn document_hidden() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .map(|d| d.hidden())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn document_hidden() -> bool {
+    false
+}
+
+/// Returns false until the user produces a gesture and the browser
+/// unlocks `AudioContext`. `play_detached` calls before that allocate a
+/// rodio sink that never gets reclaimed.
+#[cfg(target_arch = "wasm32")]
+fn audio_ready() -> bool {
+    let Some(win) = web_sys::window() else { return false; };
+    js_sys::Reflect::get(&win, &wasm_bindgen::JsValue::from_str("__icarustAudioReady"))
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audio_ready() -> bool {
+    true
+}
+
+/// Sets `window.__icarustAudioReady` on first user gesture.
+#[cfg(target_arch = "wasm32")]
+fn install_audio_ready_tracker() {
+    const JS: &str = r#"
+        if (window.__icarustAudioReadyInstalled) return;
+        window.__icarustAudioReadyInstalled = true;
+        window.__icarustAudioReady = false;
+        const mark = () => { window.__icarustAudioReady = true; };
+        const opts = { capture: true, passive: true, once: true };
+        for (const ev of ['pointerdown', 'keydown', 'touchstart', 'mousedown']) {
+            addEventListener(ev, mark, opts);
+        }
+    "#;
+    let _ = js_sys::Function::new_no_args(JS).call0(&wasm_bindgen::JsValue::NULL);
+}
+
 struct Sprites {
     player: Sprite,
     rock: Sprite,
@@ -56,8 +104,12 @@ impl Sprites {
         match kind {
             EntityKind::Player { .. } => (&self.player, Color::WHITE),
             EntityKind::Rock => (&self.rock, Color::WHITE),
-            EntityKind::Shot { owner: ShotOwner::Player(_) } => (&self.shot, Color::WHITE),
-            EntityKind::Shot { owner: ShotOwner::Enemy } => (&self.shot, ENEMY_SHOT_TINT),
+            EntityKind::Shot {
+                owner: ShotOwner::Player(_),
+            } => (&self.shot, Color::WHITE),
+            EntityKind::Shot {
+                owner: ShotOwner::Enemy,
+            } => (&self.shot, ENEMY_SHOT_TINT),
             EntityKind::Enemy => (&self.player, ENEMY_TINT),
         }
     }
@@ -92,6 +144,9 @@ pub struct MainState {
     /// Monotonic counter used as a per-explosion RNG seed so simultaneous
     /// bursts don't render identically.
     next_explosion_seed: u64,
+    /// Set once `net.is_connected()` first returns false, to swap the overlay
+    /// text and skip the input-send loop.
+    disconnected: bool,
 }
 
 impl MainState {
@@ -144,6 +199,7 @@ impl MainState {
             cached_level: 0,
             explosions: Vec::new(),
             next_explosion_seed: 1,
+            disconnected: false,
         })
     }
 
@@ -172,19 +228,31 @@ impl MainState {
         }
     }
 
+    fn play_sound(&self, ctx: &Context, id: SoundId) {
+        // Skip on wasm while AudioContext is suspended; sinks would leak.
+        if !audio_ready() {
+            return;
+        }
+        self.asset_manager.play_sound(ctx, id);
+    }
+
     fn handle_game_events(&mut self, ctx: &Context, events: &[GameEvent]) {
         for ev in events {
             match ev {
                 GameEvent::ShotFired { .. } => {
-                    self.asset_manager.play_sound(ctx, self.shot_sound_id);
+                    self.play_sound(ctx, self.shot_sound_id);
                 }
                 GameEvent::RockKilled { .. } | GameEvent::EnemyKilled { .. } => {
-                    self.asset_manager.play_sound(ctx, self.hit_sound_id);
+                    self.play_sound(ctx, self.hit_sound_id);
                     self.gui_dirty = true;
                 }
-                GameEvent::PlayerKilled { player_id, pos, cause } => {
+                GameEvent::PlayerKilled {
+                    player_id,
+                    pos,
+                    cause,
+                } => {
                     self.spawn_explosion(Vec2::new(pos.x, pos.y), ExplosionStyle::for_cause(cause));
-                    self.asset_manager.play_sound(ctx, self.hit_sound_id);
+                    self.play_sound(ctx, self.hit_sound_id);
                     if Some(*player_id) == self.local_player_id {
                         self.game_over = true;
                         self.gui_dirty = true;
@@ -307,10 +375,32 @@ impl MainState {
 impl EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         const DESIRED_FPS: u32 = 60;
+        // Bound catch-up work so re-foregrounding doesn't stall on a full queue.
+        const MAX_DRAIN_PER_UPDATE: usize = 64;
 
-        // Drain whatever the network has for us before stepping the loop.
-        while let Some(msg) = self.net.try_recv() {
+        // Skip everything while hidden — playing audio for queued events
+        // leaks rodio sinks on wasm. Drain residual dt so unhiding doesn't
+        // fire thousands of catch-up input ticks.
+        if document_hidden() {
+            while ctx.time.check_update_time(DESIRED_FPS) {}
+            return Ok(());
+        }
+
+        let mut drained = 0;
+        while drained < MAX_DRAIN_PER_UPDATE {
+            let Some(msg) = self.net.try_recv() else {
+                break;
+            };
             self.handle_server_msg(ctx, msg);
+            drained += 1;
+        }
+
+        let connected = self.net.is_connected();
+        if !connected && !self.disconnected {
+            self.disconnected = true;
+            self.disconnected_text
+                .set_text("Disconnected — server unreachable", 24.0);
+            self.gui_dirty = true;
         }
 
         while ctx.time.check_update_time(DESIRED_FPS) {
@@ -318,6 +408,11 @@ impl EventHandler for MainState {
                 ctx.request_quit();
                 self.net.send(&ClientMsg::Bye);
                 break;
+            }
+
+            // Sends to a dead socket allocate and drop; skip the churn.
+            if !connected {
+                continue;
             }
 
             // R restarts only when dead. Edge-trigger so one keypress sends
@@ -365,6 +460,9 @@ impl EventHandler for MainState {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        if document_hidden() {
+            return Ok(());
+        }
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
 
         if let Some(snap) = &self.latest_snapshot {
@@ -391,6 +489,9 @@ impl EventHandler for MainState {
                 self.game_over_text.draw(&mut canvas);
                 self.restart_hint_text.draw(&mut canvas);
             }
+            if self.disconnected {
+                self.disconnected_text.draw(&mut canvas);
+            }
         } else {
             self.disconnected_text.draw(&mut canvas);
         }
@@ -400,12 +501,7 @@ impl EventHandler for MainState {
         Ok(())
     }
 
-    fn key_down_event(
-        &mut self,
-        _ctx: &mut Context,
-        input: KeyInput,
-        _repeat: bool,
-    ) -> GameResult {
+    fn key_down_event(&mut self, _ctx: &mut Context, input: KeyInput, _repeat: bool) -> GameResult {
         self.input.handle_key_down(input);
         Ok(())
     }
@@ -528,6 +624,7 @@ pub fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
 
     console_error_panic_hook::set_once();
     let _ = tracing_wasm::try_set_as_global_default();
+    install_audio_ready_tracker();
 
     let (url, name) = wasm_parse_args();
     tracing::info!(%url, %name, "connecting");

@@ -1,13 +1,15 @@
 //! Browser `Net` impl. Wraps a `web_sys::WebSocket`.
 //!
-//! Inbound messages are pushed into a `VecDeque<ServerMsg>` by the
-//! `onmessage` callback; `try_recv` pops from the front. Outbound messages
-//! call `send_with_u8_array` directly when the socket is open, or queue
-//! into a pending buffer otherwise (so the `Hello` we send before
-//! `onopen` fires still goes out).
+//! Inbound messages are pushed to `VecDeque<ServerMsg>` by the `onmessage` callback;
+//! `try_recv` pops from the front. Outbound messages call `send_with_u8_array`
+//!  when the socket is open, or queue in a pending buffer (to wait for `onopen`)
 //!
-//! Single-threaded by construction — JS runs everything on the main thread
-//! and `wasm32-unknown-unknown` has no real threads.
+//! Inbound queue is capped at `MAX_RX_QUEUE`. Browsers throttle `requestAnimationFrame`
+//! on hidden tabs but keep firing `onmessage` at the server's full rate, so a background
+//! tab can grow the queue by ~80 msg/sec forever. We drop the oldest message on overflow,
+//! snapshots are full-state, so losing old ones costs nothing.
+//!
+//! JS runs things on the main thread and `wasm32-unknown-unknown` has no threads.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -21,6 +23,9 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{BinaryType, ErrorEvent, MessageEvent, WebSocket};
 
 use super::Net;
+
+/// ~1s of server traffic; old messages drop on overflow.
+const MAX_RX_QUEUE: usize = 128;
 
 /// Inner state, shared between the `WebNet` handle and the JS callbacks
 /// installed on the socket. Kept in a `Rc<RefCell<_>>` because callbacks
@@ -94,10 +99,16 @@ impl WebNet {
             let arr = Uint8Array::new(&buffer);
             let bytes = arr.to_vec();
             match protocol::decode::<ServerMsg>(&bytes) {
-                Ok(msg) => inner_msg.borrow_mut().rx.push_back(msg),
-                Err(e) => web_sys::console::warn_1(
-                    &format!("malformed server message: {e}").into(),
-                ),
+                Ok(msg) => {
+                    let mut s = inner_msg.borrow_mut();
+                    while s.rx.len() >= MAX_RX_QUEUE {
+                        s.rx.pop_front();
+                    }
+                    s.rx.push_back(msg);
+                }
+                Err(e) => {
+                    web_sys::console::warn_1(&format!("malformed server message: {e}").into())
+                }
             }
         });
         ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
@@ -138,11 +149,11 @@ impl Net for WebNet {
     }
 
     fn send(&self, msg: &ClientMsg) {
-        let bytes = protocol::encode(msg);
         let mut s = self.inner.borrow_mut();
         if !s.connected {
             return;
         }
+        let bytes = protocol::encode(msg);
         if s.open {
             if let Err(e) = s.ws.send_with_u8_array(&bytes) {
                 web_sys::console::warn_1(&format!("ws send failed: {e:?}").into());
@@ -159,5 +170,10 @@ impl Net for WebNet {
 }
 
 fn js_err(ctx: &'static str) -> impl FnOnce(JsValue) -> anyhow::Error {
-    move |v| anyhow!("{ctx}: {:?}", v.as_string().unwrap_or_else(|| format!("{v:?}")))
+    move |v| {
+        anyhow!(
+            "{ctx}: {:?}",
+            v.as_string().unwrap_or_else(|| format!("{v:?}"))
+        )
+    }
 }
