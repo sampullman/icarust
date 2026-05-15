@@ -8,7 +8,6 @@ pub struct InputState {
     pub yaxis: f32,
     pub fire: bool,
     pub quit: bool,
-    pub restart: bool,
     left_held: bool,
     right_held: bool,
 }
@@ -28,9 +27,6 @@ impl InputState {
             }
             KeyCode::Space => self.fire = true,
             KeyCode::Escape => self.quit = true,
-            // Edge-triggered: cleared by main's update loop, not on key-up,
-            // so a brief tap still registers across frames.
-            KeyCode::KeyR => self.restart = true,
             _ => {}
         }
     }

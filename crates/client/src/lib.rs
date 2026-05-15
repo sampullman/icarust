@@ -20,12 +20,14 @@ use crate::render::explosion::{Explosion, ExplosionStyle};
 
 pub mod assets;
 pub mod input;
+pub mod menu;
 pub mod net;
 pub mod render;
 pub mod widget;
 
 use crate::assets::{AssetManager, SoundId};
 use crate::input::InputState;
+use crate::menu::Menu;
 use crate::net::Net;
 use crate::render::camera::{Camera, Point2};
 use crate::render::entities::{
@@ -36,6 +38,21 @@ use crate::render::entities::{
 use crate::render::particles::{DamageSmoker, ThrustEmitter};
 use crate::render::sky::{Sky, SKY_COLOR};
 use crate::widget::TextWidget;
+
+/// Top-level UI state. The simulation keeps running on the server in all
+/// states; this just gates what we render and how we route input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppState {
+    /// Title screen. Server is connected and the player may exist in the
+    /// world, but we draw the menu instead. Space launches the player into
+    /// `Playing` (sending `Respawn` if they're currently dead).
+    Menu,
+    /// Live gameplay — full HUD, world rendering, input forwarded to server.
+    Playing,
+    /// Player just died. World stays visible behind a "GAME OVER" overlay.
+    /// Any key press returns to `Menu`; Esc still quits.
+    GameOver,
+}
 
 /// Visible window onto the world, in world units. The world itself is
 /// larger in both axes (`sim::world::WORLD_WIDTH` and `WORLD_HEIGHT`) so
@@ -49,7 +66,7 @@ const CAMERA_FOLLOW_RATE: f32 = 8.0;
 
 fn print_instructions() {
     tracing::info!("Welcome to Icarust!");
-    tracing::info!("Controls: Left/Right rotate, Up thrust, Space fire, R restart, Esc quit");
+    tracing::info!("Controls: Left/Right rotate, Up thrust, Space fire, Esc quit");
 }
 
 /// What to draw for an entity. Ships need their wings scaled separately
@@ -199,9 +216,16 @@ pub struct MainState {
     score_text: TextWidget,
     level_text: TextWidget,
     game_over_text: TextWidget,
-    restart_hint_text: TextWidget,
+    game_over_hint: TextWidget,
     disconnected_text: TextWidget,
-    game_over: bool,
+    /// Top-level UI state. See `AppState` for transitions.
+    app_state: AppState,
+    /// Title screen owns its own animation; ticked while `app_state == Menu`.
+    menu: Menu,
+    /// Edge-triggered: Space pressed in `Menu`. Consumed at the next update.
+    request_start: bool,
+    /// Edge-triggered: any key pressed in `GameOver`. Consumed at the next update.
+    request_back_to_menu: bool,
     cached_score: i32,
     cached_level: i32,
     /// Seconds since `latest_snapshot` arrived. The server snapshots at
@@ -244,10 +268,11 @@ impl MainState {
         let level_text = TextWidget::new(ctx, &mut am, 18.0)?;
         let mut game_over_text = TextWidget::new(ctx, &mut am, 48.0)?;
         game_over_text.set_text("GAME OVER", 48.0);
-        let mut restart_hint_text = TextWidget::new(ctx, &mut am, 22.0)?;
-        restart_hint_text.set_text("press R to restart", 22.0);
+        let mut game_over_hint = TextWidget::new(ctx, &mut am, 22.0)?;
+        game_over_hint.set_text("press any key for menu", 22.0);
         let mut disconnected_text = TextWidget::new(ctx, &mut am, 24.0)?;
         disconnected_text.set_text("Connecting…", 24.0);
+        let menu = Menu::new(ctx, &mut am)?;
 
         // Use the deepest valley as the camera's floor reference so the
         // pilot can dive into low spots without the camera bottoming
@@ -281,9 +306,12 @@ impl MainState {
             score_text,
             level_text,
             game_over_text,
-            restart_hint_text,
+            game_over_hint,
             disconnected_text,
-            game_over: false,
+            app_state: AppState::Menu,
+            menu,
+            request_start: false,
+            request_back_to_menu: false,
             cached_score: 0,
             cached_level: 0,
             explosions: Vec::new(),
@@ -320,14 +348,22 @@ impl MainState {
                 self.terrain_renderer.sync(ctx, &snap.terrain);
                 self.latest_snapshot = Some(snap);
                 self.time_since_snapshot = 0.0;
-                // If our entity is back in the world, we're alive again.
-                if self.game_over && self.local_player().is_some() {
-                    self.game_over = false;
+                // If we requested a respawn while in GameOver / Menu and
+                // our entity is back in the world, drop the overlay so the
+                // next snapshot draws live gameplay.
+                if self.app_state == AppState::GameOver && self.local_player().is_some() {
+                    self.app_state = AppState::Playing;
                     self.gui_dirty = true;
                 }
             }
             ServerMsg::Events { events, .. } => {
-                self.handle_game_events(ctx, &events);
+                // While the title screen is up we don't want incidental
+                // explosions / shot sounds from the live world leaking
+                // through (the player isn't watching it). Still process
+                // them in Playing/GameOver so deaths and audio land.
+                if self.app_state != AppState::Menu {
+                    self.handle_game_events(ctx, &events);
+                }
             }
         }
     }
@@ -382,8 +418,14 @@ impl MainState {
                 } => {
                     self.spawn_explosion(Vec2::new(pos.x, pos.y), ExplosionStyle::for_cause(cause));
                     self.play_sound(ctx, self.hit_sound_id);
-                    if Some(*player_id) == self.local_player_id {
-                        self.game_over = true;
+                    // Only flip into GameOver if we're currently playing —
+                    // dying while still on the title screen leaves the menu
+                    // intact and we'll just Respawn whenever the player
+                    // hits Space.
+                    if Some(*player_id) == self.local_player_id
+                        && self.app_state == AppState::Playing
+                    {
+                        self.app_state = AppState::GameOver;
                         self.gui_dirty = true;
                     }
                 }
@@ -457,8 +499,8 @@ impl MainState {
             (screen.y - go_h) / 2.0,
         ));
 
-        let hint_w = self.restart_hint_text.width(ctx);
-        self.restart_hint_text.set_position(Point2::new(
+        let hint_w = self.game_over_hint.width(ctx);
+        self.game_over_hint.set_position(Point2::new(
             (screen.x - hint_w) / 2.0,
             (screen.y - go_h) / 2.0 + go_h + 8.0,
         ));
@@ -547,6 +589,81 @@ impl MainState {
         }
     }
 
+    /// Render the live world + HUD (Playing / GameOver). The Menu draw
+    /// path is handled separately in `draw`.
+    fn draw_world(&mut self, _ctx: &mut Context, canvas: &mut Canvas) {
+        if let Some(snap) = &self.latest_snapshot {
+            // Background: cream sky + parallax clouds, behind everything.
+            self.sky.draw(canvas, &self.camera);
+
+            // Terrain (soil polygon + horizon stripe + grass tufts)
+            // underneath the play layer. The renderer was synced from
+            // the latest snapshot in `handle_server_msg`, so we don't
+            // re-touch `snap.terrain` here.
+            self.terrain_renderer.draw(canvas, &self.camera);
+
+            // Thrust trails behind ships (drawn before the ships so the
+            // flame appears to come out of the tail rather than over it).
+            self.thrust.draw(canvas, &self.camera);
+
+            for entity in &snap.entities {
+                if !entity.alive {
+                    continue;
+                }
+                self.draw_entity(canvas, entity);
+            }
+
+            // Damage smoke on top of ships so torn-up hulls smolder
+            // visibly, then explosions on top of everything.
+            self.smoke.draw(canvas, &self.camera);
+            for ex in &self.explosions {
+                ex.draw(canvas, &self.camera);
+            }
+
+            self.level_text.draw(canvas);
+            self.score_text.draw(canvas);
+            if let Some(p) = self.local_player() {
+                if p.alive && p.max_hp > 0 {
+                    self.draw_hp_bar(canvas, p.hp, p.max_hp);
+                }
+            }
+            if self.app_state == AppState::GameOver {
+                self.game_over_text.draw(canvas);
+                self.game_over_hint.draw(canvas);
+            }
+            if self.disconnected {
+                self.disconnected_text.draw(canvas);
+            }
+        } else {
+            self.disconnected_text.draw(canvas);
+        }
+    }
+
+    /// Apply pending UI transitions queued from key handlers. Runs once at
+    /// the top of `update` so the rest of the frame sees the new state.
+    fn apply_state_transitions(&mut self) {
+        if self.request_start && self.app_state == AppState::Menu {
+            self.request_start = false;
+            // If we're currently dead, ask the server to respawn us before
+            // entering Playing. Otherwise just take the camera off the menu.
+            if self.local_player().is_none() && !self.disconnected {
+                self.net.send(&ClientMsg::Respawn);
+            }
+            // Drop any keys that were already held while on the menu so we
+            // don't immediately fire / thrust from a stale state.
+            self.input = InputState::default();
+            self.app_state = AppState::Playing;
+            self.gui_dirty = true;
+        }
+        if self.request_back_to_menu && self.app_state == AppState::GameOver {
+            self.request_back_to_menu = false;
+            self.menu.set_last_score(Some(self.cached_score));
+            self.input = InputState::default();
+            self.app_state = AppState::Menu;
+            self.gui_dirty = true;
+        }
+    }
+
     /// HP bar pinned to the top-left, just under the score/level text. Shows
     /// only when the local player has a meaningful HP — i.e. they're alive
     /// and the snapshot carries a max_hp > 0.
@@ -622,6 +739,10 @@ impl EventHandler for MainState {
             self.gui_dirty = true;
         }
 
+        // Resolve pending UI transitions before the fixed-step loop runs,
+        // so the right state's input/animation runs this frame.
+        self.apply_state_transitions();
+
         while ctx.time.check_update_time(DESIRED_FPS) {
             if self.input.quit {
                 ctx.request_quit();
@@ -634,17 +755,18 @@ impl EventHandler for MainState {
                 continue;
             }
 
-            // R restarts only when dead. Edge-trigger so one keypress sends
-            // exactly one Respawn.
-            if self.game_over && self.input.restart {
-                self.net.send(&ClientMsg::Respawn);
-                self.input.restart = false;
-            }
-
+            // Only forward live inputs while playing. In Menu / GameOver the
+            // ship sits idle on the server (or stays dead) until the player
+            // launches into Playing.
+            let outgoing_input = if self.app_state == AppState::Playing {
+                self.input.to_player_input()
+            } else {
+                sim::PlayerInput::default()
+            };
             self.next_input_tick = self.next_input_tick.next();
             let input_msg = ClientMsg::Input {
                 tick: self.next_input_tick,
-                input: self.input.to_player_input(),
+                input: outgoing_input,
             };
             self.net.send(&input_msg);
         }
@@ -725,6 +847,9 @@ impl EventHandler for MainState {
         self.smoke.update(dt);
         let world_size = Vec2::new(sim::world::WORLD_WIDTH, sim::world::WORLD_HEIGHT);
         self.sky.update(dt, world_size);
+        if self.app_state == AppState::Menu {
+            self.menu.update(dt, self.camera.screen_size());
+        }
 
         let snap_score = self
             .latest_snapshot
@@ -753,50 +878,17 @@ impl EventHandler for MainState {
         }
         let mut canvas = graphics::Canvas::from_frame(ctx, SKY_COLOR);
 
-        if let Some(snap) = &self.latest_snapshot {
-            // Background: cream sky + parallax clouds, behind everything.
-            self.sky.draw(&mut canvas, &self.camera);
-
-            // Terrain (soil polygon + horizon stripe + grass tufts)
-            // underneath the play layer. The renderer was synced from
-            // the latest snapshot in `handle_server_msg`, so we don't
-            // re-touch `snap.terrain` here.
-            self.terrain_renderer.draw(&mut canvas, &self.camera);
-
-            // Thrust trails behind ships (drawn before the ships so the
-            // flame appears to come out of the tail rather than over it).
-            self.thrust.draw(&mut canvas, &self.camera);
-
-            for entity in &snap.entities {
-                if !entity.alive {
-                    continue;
-                }
-                self.draw_entity(&mut canvas, entity);
-            }
-
-            // Damage smoke on top of ships so torn-up hulls smolder
-            // visibly, then explosions on top of everything.
-            self.smoke.draw(&mut canvas, &self.camera);
-            for ex in &self.explosions {
-                ex.draw(&mut canvas, &self.camera);
-            }
-
-            self.level_text.draw(&mut canvas);
-            self.score_text.draw(&mut canvas);
-            if let Some(p) = self.local_player() {
-                if p.alive && p.max_hp > 0 {
-                    self.draw_hp_bar(&mut canvas, p.hp, p.max_hp);
+        match self.app_state {
+            AppState::Menu => {
+                let screen = self.camera.screen_size();
+                self.menu.draw(ctx, &mut canvas, &self.meshes, screen);
+                if self.disconnected {
+                    self.disconnected_text.draw(&mut canvas);
                 }
             }
-            if self.game_over {
-                self.game_over_text.draw(&mut canvas);
-                self.restart_hint_text.draw(&mut canvas);
+            AppState::Playing | AppState::GameOver => {
+                self.draw_world(ctx, &mut canvas);
             }
-            if self.disconnected {
-                self.disconnected_text.draw(&mut canvas);
-            }
-        } else {
-            self.disconnected_text.draw(&mut canvas);
         }
 
         canvas.finish(ctx)?;
@@ -804,13 +896,42 @@ impl EventHandler for MainState {
         Ok(())
     }
 
-    fn key_down_event(&mut self, _ctx: &mut Context, input: KeyInput, _repeat: bool) -> GameResult {
-        self.input.handle_key_down(input);
+    fn key_down_event(&mut self, _ctx: &mut Context, input: KeyInput, repeat: bool) -> GameResult {
+        // Esc always quits, regardless of which screen we're on.
+        let code = match input.event.physical_key {
+            ggez::winit::keyboard::PhysicalKey::Code(c) => Some(c),
+            _ => None,
+        };
+        if code == Some(ggez::input::keyboard::KeyCode::Escape) {
+            self.input.quit = true;
+            return Ok(());
+        }
+
+        match self.app_state {
+            AppState::Menu => {
+                if !repeat && code == Some(ggez::input::keyboard::KeyCode::Space) {
+                    self.request_start = true;
+                }
+            }
+            AppState::Playing => {
+                self.input.handle_key_down(input);
+            }
+            AppState::GameOver => {
+                // Any key press returns to the menu. Ignore key repeat so
+                // a held key doesn't immediately bounce us in and out.
+                if !repeat {
+                    self.request_back_to_menu = true;
+                }
+            }
+        }
         Ok(())
     }
 
     fn key_up_event(&mut self, _ctx: &mut Context, input: KeyInput) -> GameResult {
-        self.input.handle_key_up(input);
+        // Only Playing tracks held-key state; other states ignore key-ups.
+        if self.app_state == AppState::Playing {
+            self.input.handle_key_up(input);
+        }
         Ok(())
     }
 

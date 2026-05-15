@@ -38,9 +38,10 @@ impl TextWidget {
     }
 
     pub fn draw(&self, canvas: &mut Canvas) {
-        canvas.draw(
-            &self.asset.text,
-            DrawParam::new().dest(self.pos).color(Color::WHITE),
-        );
+        self.draw_with(canvas, Color::WHITE);
+    }
+
+    pub fn draw_with(&self, canvas: &mut Canvas, color: Color) {
+        canvas.draw(&self.asset.text, DrawParam::new().dest(self.pos).color(color));
     }
 }
