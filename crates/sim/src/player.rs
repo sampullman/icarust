@@ -2,8 +2,8 @@ use crate::input::PlayerInput;
 use crate::util::{self, Vec2};
 
 pub const PLAYER_BBOX: f32 = 12.0;
-pub const PLAYER_THRUST: f32 = 540.0;
-pub const PLAYER_MAX_SPEED: f32 = 220.0;
+pub const PLAYER_THRUST: f32 = 594.0;
+pub const PLAYER_MAX_SPEED: f32 = 264.0;
 pub const PLAYER_GRAVITY: f32 = 110.0;
 /// Linear drag coefficient (units/s² per unit/s of speed).
 pub const PLAYER_DRAG: f32 = 0.6;

@@ -40,6 +40,10 @@ pub const PLAYER_SHOT_COLOR: Color = Color::new(0.28, 0.08, 0.12, 1.0);
 /// Enemy bullets — burnt orange, distinct from player shots so the
 /// pilot can tell which way to dodge.
 pub const ENEMY_SHOT_COLOR: Color = Color::new(0.82, 0.32, 0.14, 1.0);
+/// Tank shells — darker red than ship bullets, with a heavier silhouette.
+/// Higher contrast against the sky so the player can spot the more
+/// dangerous projectile in time to evade.
+pub const TANK_SHOT_COLOR: Color = Color::new(0.55, 0.18, 0.10, 1.0);
 /// Thrust flame core (bright yellow).
 pub const FLAME_CORE_COLOR: Color = Color::new(1.0, 0.92, 0.55, 1.0);
 /// Thrust flame edge (orange).
@@ -114,6 +118,9 @@ pub struct EntityMeshes {
     pub enemy: ShipMesh,
     pub tank: TankMesh,
     pub shot: Mesh,
+    /// Tank-fired shell. Bigger and stubbier than `shot` so the heavy
+    /// artillery reads as a different threat at a glance.
+    pub tank_shell: Mesh,
 }
 
 impl EntityMeshes {
@@ -123,6 +130,7 @@ impl EntityMeshes {
             enemy: build_enemy(ctx)?,
             tank: build_tank(ctx)?,
             shot: build_shot(ctx)?,
+            tank_shell: build_tank_shell(ctx)?,
         })
     }
 }
@@ -357,6 +365,34 @@ fn build_shot(ctx: &mut Context) -> GameResult<Mesh> {
     mb.rectangle(
         DrawMode::fill(),
         Rect::new(-1.0, 2.0, 2.0, 3.0),
+        Color::WHITE,
+    )?;
+    let data = mb.build();
+    Ok(Mesh::from_data(ctx, data))
+}
+
+/// Tank shell — bigger, heavier silhouette than a ship bullet. The head
+/// is a pointed pentagon (so the shape reads as "explosive ordnance"
+/// rather than a bullet) and the trail is a wider rectangle. Same +Y
+/// orientation convention as `build_shot` so it rotates with `facing`.
+fn build_tank_shell(ctx: &mut Context) -> GameResult<Mesh> {
+    let mut mb = MeshBuilder::new();
+    // Pointed shell head — pentagon tip up, base flush with the body.
+    mb.polygon(
+        DrawMode::fill(),
+        &[
+            Vec2::new(0.0, -7.5),
+            Vec2::new(3.0, -4.0),
+            Vec2::new(3.0, 1.0),
+            Vec2::new(-3.0, 1.0),
+            Vec2::new(-3.0, -4.0),
+        ],
+        Color::WHITE,
+    )?;
+    // Body / driving band — a slightly wider rectangle behind the head.
+    mb.rectangle(
+        DrawMode::fill(),
+        Rect::new(-2.4, 1.0, 4.8, 4.5),
         Color::WHITE,
     )?;
     let data = mb.build();

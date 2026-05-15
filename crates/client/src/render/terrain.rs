@@ -1,19 +1,52 @@
-//! Terrain rendering. The server sends terrain bands in every snapshot;
-//! this module turns them into tinted quads in screen space.
+//! Terrain rendering.
 //!
-//! Each `TerrainKind` picks its own color (and, when we have art, its
-//! own sprite/tiling). The world is Y-up so a band that fills `[0,
-//! top_y]` in world coords lands at the bottom of the screen.
+//! The server sends a `Vec<TerrainBand>` in every snapshot; each band
+//! carries a `GroundProfile` heightmap. We turn that into a *single*
+//! batched mesh covering one world-width of terrain — soil polygon,
+//! horizon stripe, grass tufts, and pebbles, all in one
+//! `MeshBuilder` with vertex colors baked in. At draw time we issue
+//! one `canvas.draw` per visible wrap copy, instead of one per
+//! decoration. On a 3200-wide world that's typically 2 draw calls
+//! per frame for the whole ground layer.
+//!
+//! The mesh is built in world coords with Y flipped to screen-down,
+//! so a `dest = world_to_screen(Vec2::new(dx, 0))` per wrap copy
+//! places it correctly. Tuft rotation (slope-aligned) is baked into
+//! the vertex positions at build time so the GPU never sees a
+//! per-tuft rotation matrix.
+//!
+//! New `TerrainKind`s plug in here by adding a row to `fill_color_for`
+//! and (optionally) a per-kind decoration pass inside
+//! `append_terrain_band`.
 
 use ggez::glam::Vec2;
-use ggez::graphics::{self, Canvas, Color, DrawParam};
-use sim::{TerrainBand, TerrainKind};
+use ggez::graphics::{Canvas, Color, DrawMode, DrawParam, Mesh, MeshBuilder};
+use ggez::{Context, GameResult};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
+use sim::terrain::{GroundProfile, TerrainBand, TerrainKind};
 
 use crate::render::camera::Camera;
 
+/// Approximate spacing (world units) between grass tufts / pebbles.
+/// Tightening this packs more decorations per world but they're all
+/// baked into one batched mesh, so the cost is purely build-time
+/// geometry, not per-frame draws.
+const TUFT_SPACING: f32 = 32.0;
+/// Seeds the tuft placement RNG. XOR'd with the world's first surface
+/// height so two different terrains don't produce identical tufting.
+const TUFT_SEED_BASE: u64 = 0xA17E_C0FF_EE3A_DA15;
+/// How far below world Y=0 the soil polygon's bottom edge sits. We
+/// over-extend so the camera diving into a valley never sees the
+/// mesh's open bottom. Stored in screen-down (Y-flipped) coords, so
+/// this is positive.
+const FLOOR_DEPTH: f32 = 80.0;
+/// Horizon stripe thickness (world units).
+const HORIZON_STRIPE: f32 = 2.0;
+
 fn fill_color_for(kind: TerrainKind) -> Color {
     match kind {
-        // Warm dusty tan — matches the Luftrauser reference.
+        // Warm dusty tan — main soil body.
         TerrainKind::Ground => Color::new(0.66, 0.50, 0.36, 1.0),
     }
 }
@@ -25,33 +58,342 @@ fn edge_color_for(kind: TerrainKind) -> Color {
     }
 }
 
-pub fn draw(canvas: &mut Canvas, camera: &Camera, bands: &[TerrainBand]) {
-    let screen = camera.screen_size();
-    for band in bands {
-        let fill = fill_color_for(band.kind);
-        let edge = edge_color_for(band.kind);
-        // Top of band in screen-space. We draw the band across the full
-        // screen width so the letterbox bars stay covered too — the play
-        // area's left/right edges shouldn't show sky through the floor.
-        let top = camera.world_to_screen(Vec2::new(camera.center().x, band.top_y));
-        let y_top = top.y;
-        let h = (screen.y - y_top).max(0.0);
-        canvas.draw(
-            &graphics::Quad,
-            DrawParam::new()
-                .dest(Vec2::new(0.0, y_top))
-                .scale([screen.x, h])
-                .color(fill),
-        );
-        // Thin horizon stripe so the boundary reads cleanly. ~2 px tall
-        // independent of screen scale — close enough.
-        let stripe_h = 2.0_f32.max(2.0 * camera.scale() * 0.5);
-        canvas.draw(
-            &graphics::Quad,
-            DrawParam::new()
-                .dest(Vec2::new(0.0, y_top - stripe_h * 0.5))
-                .scale([screen.x, stripe_h])
-                .color(edge),
-        );
+/// Tint of the grass blades sitting on top of the soil. Slightly
+/// green-shifted brown so it reads as dry-grass aesthetic rather than
+/// lush lawn — matches the dusty palette of the rest of the world.
+const GRASS_COLOR: Color = Color::new(0.46, 0.52, 0.26, 1.0);
+/// Tint of dirt pebbles — a step darker than the soil fill so they
+/// pop against it.
+const PEBBLE_COLOR: Color = Color::new(0.42, 0.30, 0.20, 1.0);
+
+/// Two flavors of tuft. Sampled with weighted random choice at build
+/// time so the surface gets a mix.
+#[derive(Debug, Clone, Copy)]
+enum TuftStyle {
+    Grass,
+    Pebble,
+}
+
+/// One concrete tuft placement along the surface (world coords, Y-up).
+#[derive(Debug, Clone, Copy)]
+struct Tuft {
+    /// World X anchor.
+    x: f32,
+    /// Surface Y at the anchor — pre-computed so build time doesn't
+    /// have to interpolate the profile for each tuft.
+    y: f32,
+    /// Local rotation aligning the tuft with the slope at its anchor.
+    /// `0` = upright; positive = tilted right on screen.
+    rotation: f32,
+    /// Uniform scale jitter (1.0 = base size).
+    scale: f32,
+    style: TuftStyle,
+}
+
+/// Cached terrain renderer. Rebuilds the mesh only when the band
+/// signature changes — today that's "once, ever," but the indirection
+/// means a future server that swaps terrain per level works without
+/// special-casing.
+pub struct TerrainRenderer {
+    /// Hash of the bands that produced the cached mesh. Cheap
+    /// signature so `sync` can short-circuit when nothing changed.
+    signature: u64,
+    /// Single batched mesh containing every renderable piece of the
+    /// ground layer. Vertex colors are baked in so the draw call uses
+    /// a plain white tint.
+    mesh: Option<Mesh>,
+    /// World width covered by the cached profile — needed at draw
+    /// time to pick wrap-mirrored copies.
+    world_width: f32,
+}
+
+impl TerrainRenderer {
+    /// Builds an empty renderer with no cached mesh. First call to
+    /// [`sync`] populates it from the server's terrain.
+    pub fn empty() -> Self {
+        Self {
+            signature: 0,
+            mesh: None,
+            world_width: 0.0,
+        }
     }
+
+    /// Refresh the cached mesh if `bands` differs from the last sync.
+    /// Cheap when bands are unchanged (just hashes the heights), so it
+    /// is safe to call on every snapshot.
+    pub fn sync(&mut self, ctx: &mut Context, bands: &[TerrainBand]) {
+        let sig = signature(bands);
+        if sig == self.signature && self.mesh.is_some() {
+            return;
+        }
+        if let Err(e) = self.rebuild(ctx, bands) {
+            tracing::warn!(error = ?e, "terrain renderer rebuild failed");
+        } else {
+            self.signature = sig;
+        }
+    }
+
+    fn rebuild(&mut self, ctx: &mut Context, bands: &[TerrainBand]) -> GameResult<()> {
+        self.mesh = None;
+        self.world_width = 0.0;
+
+        let mut mb = MeshBuilder::new();
+        for band in bands {
+            self.world_width = self.world_width.max(band.profile.world_width);
+            append_terrain_band(&mut mb, band)?;
+        }
+        if self.world_width > 0.0 {
+            self.mesh = Some(Mesh::from_data(ctx, mb.build()));
+        }
+        Ok(())
+    }
+
+    /// Draw the cached terrain mesh once per visible wrap copy. Called
+    /// after the sky and before the entities, so flying objects pass
+    /// in front of the ground.
+    pub fn draw(&self, canvas: &mut Canvas, camera: &Camera) {
+        let Some(mesh) = &self.mesh else {
+            return;
+        };
+        let scale = camera.scale();
+        for dx in copies_for(camera.center().x, self.world_width, camera.view_size().x) {
+            let origin = camera.world_to_screen(Vec2::new(dx, 0.0));
+            canvas.draw(
+                mesh,
+                DrawParam::new()
+                    .dest(origin)
+                    .scale([scale, scale])
+                    .color(Color::WHITE),
+            );
+        }
+    }
+}
+
+/// Append every piece of a single terrain band to `mb`: filled soil
+/// polygon, horizon stripe, and the band's tuft decorations. Vertex
+/// colors come from `fill_color_for` / `edge_color_for` / the tuft
+/// palette, so the resulting mesh can be drawn with a plain white
+/// tint.
+fn append_terrain_band(mb: &mut MeshBuilder, band: &TerrainBand) -> GameResult<()> {
+    match band.kind {
+        TerrainKind::Ground => {
+            append_ground_polygon(mb, &band.profile, band.kind)?;
+            append_horizon_stripe(mb, &band.profile, band.kind)?;
+            let tufts = build_tufts(&band.profile);
+            for tuft in &tufts {
+                append_tuft(mb, tuft)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Walk the top-edge of the profile L→R then seal with two bottom
+/// corners below the world floor. Earcut triangulation in
+/// `MeshBuilder::polygon` handles the non-convex top edge correctly.
+fn append_ground_polygon(
+    mb: &mut MeshBuilder,
+    profile: &GroundProfile,
+    kind: TerrainKind,
+) -> GameResult<()> {
+    let n = profile.heights.len();
+    if n == 0 {
+        return Ok(());
+    }
+    let mut poly: Vec<Vec2> = Vec::with_capacity(n + 3);
+    for i in 0..=n {
+        let xi = (i as f32) * profile.spacing;
+        let h = profile.heights[i % n];
+        poly.push(Vec2::new(xi, -h));
+    }
+    poly.push(Vec2::new(profile.world_width, FLOOR_DEPTH));
+    poly.push(Vec2::new(0.0, FLOOR_DEPTH));
+    mb.polygon(DrawMode::fill(), &poly, fill_color_for(kind))?;
+    Ok(())
+}
+
+/// Stripe along the profile's top edge using one thin quad per
+/// segment. Per-segment quads (rather than a polyline stroke) give us
+/// stable thickness regardless of how ggez handles stroke joins.
+fn append_horizon_stripe(
+    mb: &mut MeshBuilder,
+    profile: &GroundProfile,
+    kind: TerrainKind,
+) -> GameResult<()> {
+    let n = profile.heights.len();
+    if n == 0 {
+        return Ok(());
+    }
+    let color = edge_color_for(kind);
+    let half_t = HORIZON_STRIPE * 0.5;
+    for i in 0..n {
+        let xa = (i as f32) * profile.spacing;
+        let xb = ((i + 1) as f32) * profile.spacing;
+        let a = Vec2::new(xa, -profile.heights[i]);
+        let b = Vec2::new(xb, -profile.heights[(i + 1) % n]);
+        let dir = b - a;
+        let len = dir.length();
+        if len < 1e-3 {
+            continue;
+        }
+        let nrm = Vec2::new(-dir.y / len, dir.x / len);
+        let off = nrm * half_t;
+        let quad = [a - off, b - off, b + off, a + off];
+        mb.polygon(DrawMode::fill(), &quad, color)?;
+    }
+    Ok(())
+}
+
+/// Build a list of tufts anchored to the surface of `profile`. Spacing
+/// is roughly `TUFT_SPACING` with seeded jitter; each tuft picks a
+/// style and a slope-aligned rotation.
+fn build_tufts(profile: &GroundProfile) -> Vec<Tuft> {
+    let seed = TUFT_SEED_BASE
+        ^ profile.heights.first().copied().unwrap_or(0.0).to_bits() as u64
+        ^ (profile.heights.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
+    let w = profile.world_width;
+    if w <= 0.0 {
+        return Vec::new();
+    }
+    let approx_count = (w / TUFT_SPACING).round() as usize;
+    let mut tufts = Vec::with_capacity(approx_count);
+    let mut x = 0.0_f32;
+    while x < w {
+        let jitter: f32 = rng.gen::<f32>() * TUFT_SPACING * 0.4;
+        let here = (x + jitter).min(w - 1.0);
+        let y = profile.height_at(here);
+        // Slope at this point, used to rotate the tuft so it stands
+        // perpendicular to the ground rather than straight up.
+        let probe = 4.0_f32.min(profile.spacing * 0.5);
+        let slope = (profile.height_at(here + probe) - profile.height_at(here - probe))
+            / (2.0 * probe);
+        let rotation = slope.atan();
+        let scale = 0.85 + rng.gen::<f32>() * 0.35;
+        // 75% grass, 25% pebble. Mixing them sells "dusty soil with
+        // scrubby growth" without leaning entirely on one stamp.
+        let style = if rng.gen::<f32>() < 0.75 {
+            TuftStyle::Grass
+        } else {
+            TuftStyle::Pebble
+        };
+        tufts.push(Tuft {
+            x: here,
+            y,
+            rotation,
+            scale,
+            style,
+        });
+        x += TUFT_SPACING;
+    }
+    tufts
+}
+
+/// Local-space points (screen-down, anchor at origin) of each polygon
+/// that makes up a grass tuft. `-y` is "up out of the ground." Vertex
+/// order goes CCW in screen-down (which is CW in world-up), matching
+/// ggez's expected winding.
+const GRASS_BLADES: &[&[Vec2]] = &[
+    // Central blade.
+    &[
+        Vec2::new(-1.2, 0.0),
+        Vec2::new(1.2, 0.0),
+        Vec2::new(0.0, -6.5),
+    ],
+    // Left lean.
+    &[
+        Vec2::new(-2.5, 0.0),
+        Vec2::new(-0.5, 0.0),
+        Vec2::new(-3.6, -4.6),
+    ],
+    // Right lean.
+    &[
+        Vec2::new(0.5, 0.0),
+        Vec2::new(2.5, 0.0),
+        Vec2::new(3.6, -4.4),
+    ],
+];
+
+/// Pebble silhouette — a flat oval-ish polygon resting on the ground.
+const PEBBLE: &[Vec2] = &[
+    Vec2::new(-3.0, 0.0),
+    Vec2::new(-1.8, -2.0),
+    Vec2::new(1.8, -2.2),
+    Vec2::new(3.2, -0.4),
+    Vec2::new(1.4, 0.4),
+    Vec2::new(-1.6, 0.3),
+];
+
+/// Bake one tuft into the batched mesh: rotate + scale its local
+/// vertices, translate to the band's flipped anchor, and add as a
+/// polygon with the tuft's color baked in. No per-draw rotation or
+/// scale needs to follow at render time.
+fn append_tuft(mb: &mut MeshBuilder, tuft: &Tuft) -> GameResult<()> {
+    let (sin_r, cos_r) = tuft.rotation.sin_cos();
+    let scale = tuft.scale;
+    let anchor = Vec2::new(tuft.x, -tuft.y);
+
+    let (polys, color): (&[&[Vec2]], Color) = match tuft.style {
+        TuftStyle::Grass => (GRASS_BLADES, GRASS_COLOR),
+        TuftStyle::Pebble => (&[PEBBLE], PEBBLE_COLOR),
+    };
+
+    // Reused buffer per polygon — avoids alloc-per-tuft.
+    let mut transformed: Vec<Vec2> = Vec::with_capacity(8);
+    for points in polys {
+        transformed.clear();
+        for p in points.iter() {
+            let sx = p.x * scale;
+            let sy = p.y * scale;
+            // Screen-space rotation (CCW math, CW visual): standard
+            // 2x2 rotation matrix matches `DrawParam::rotation`.
+            transformed.push(Vec2::new(
+                anchor.x + cos_r * sx - sin_r * sy,
+                anchor.y + sin_r * sx + cos_r * sy,
+            ));
+        }
+        mb.polygon(DrawMode::fill(), &transformed, color)?;
+    }
+    Ok(())
+}
+
+/// Cheap order-sensitive hash of every band's heightmap. Used to
+/// detect when the renderer's cache is stale without comparing whole
+/// `Vec<f32>`s.
+fn signature(bands: &[TerrainBand]) -> u64 {
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    let mix = |h: &mut u64, x: u64| {
+        *h ^= x;
+        *h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    };
+    for b in bands {
+        mix(&mut h, b.kind as u64);
+        mix(&mut h, b.profile.heights.len() as u64);
+        mix(&mut h, b.profile.world_width.to_bits() as u64);
+        mix(&mut h, b.profile.spacing.to_bits() as u64);
+        for s in &b.profile.heights {
+            mix(&mut h, s.to_bits() as u64);
+        }
+    }
+    h
+}
+
+/// World-X offsets of wrap copies whose horizontal extent overlaps the
+/// viewport. With `view_width < world_width`, at most two of the three
+/// candidates land in the viewport.
+fn copies_for(center_x: f32, world_w: f32, view_w: f32) -> Vec<f32> {
+    if world_w <= 0.0 {
+        return vec![];
+    }
+    let half_view = view_w * 0.5 + 32.0;
+    let mut out = Vec::with_capacity(3);
+    for dx in [-world_w, 0.0, world_w] {
+        let lo = dx;
+        let hi = dx + world_w;
+        if hi >= center_x - half_view && lo <= center_x + half_view {
+            out.push(dx);
+        }
+    }
+    out
 }

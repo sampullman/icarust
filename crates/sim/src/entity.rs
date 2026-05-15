@@ -16,15 +16,35 @@ impl Tick {
     }
 }
 
-/// Who fired a shot. Player shots score kills on hostiles; enemy shots
-/// don't credit anyone but still chip away at player HP. Tank shells are
-/// covered under `Enemy` for now; if we ever need to tell them apart on
-/// the wire (e.g. for hit feedback) we can add a `Tank` variant without
-/// breaking existing handlers.
+/// Who fired a shot. Player shots score kills on hostiles; the hostile
+/// variants don't credit anyone but still chip away at player HP. `Tank`
+/// is split out from `Enemy` so the client can render the heavier shell
+/// (bigger sprite, recognizable silhouette) and the server can apply the
+/// higher damage value associated with artillery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShotOwner {
     Player(PlayerId),
     Enemy,
+    Tank,
+}
+
+impl ShotOwner {
+    /// Hostile shots damage the player by this many HP per hit. Player
+    /// shots don't hit other players, so the value for `Player(_)` is
+    /// inert (we still return `1` so calling code stays branch-free).
+    pub fn damage(self) -> i16 {
+        match self {
+            ShotOwner::Tank => 2,
+            ShotOwner::Enemy | ShotOwner::Player(_) => 1,
+        }
+    }
+
+    /// True if this shot was fired by a hostile entity (anything that
+    /// can damage a player). Lets shared collision code treat all
+    /// non-player ownerships uniformly.
+    pub fn is_hostile(self) -> bool {
+        matches!(self, ShotOwner::Enemy | ShotOwner::Tank)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -74,6 +94,16 @@ pub struct Entity {
     /// else. Player gravity lives in `player::apply_forces` rather than
     /// here because it interacts with drag and the speed clamp.
     pub accel: Vec2,
+    /// Entity that spawned this one — typically the tank that fired a
+    /// shell. Used by friendly-fire collision to skip self-hits without
+    /// having to read it back off the wire (this field is sim-only).
+    pub source: Option<EntityId>,
+    /// True if this shot detonates on contact with terrain instead of
+    /// bouncing. Heavy artillery flips this on; ship bullets keep it
+    /// off so they ricochet along the hillside. A flat boolean keeps
+    /// the move-step branch trivial and leaves room for other behaviors
+    /// to opt in (e.g. a future "smart bomb" that also detonates).
+    pub detonates_on_terrain: bool,
 }
 
 impl Entity {
@@ -97,6 +127,8 @@ impl Entity {
             damage_timer: f32::MAX / 2.0,
             thrusting: false,
             accel: Vec2::ZERO,
+            source: None,
+            detonates_on_terrain: false,
         }
     }
 
@@ -117,12 +149,16 @@ impl Entity {
             damage_timer: 0.0,
             thrusting: false,
             accel: Vec2::ZERO,
+            source: None,
+            detonates_on_terrain: false,
         }
     }
 
     /// A shot that's affected by per-tick `accel` — used for tank shells
-    /// so they arc under gravity. Same lifetime + bbox as a regular shot;
-    /// only the integration differs.
+    /// so they arc under gravity. Caller supplies the hit radius, the
+    /// lifetime, and the spawning entity so friendly-fire collision can
+    /// skip self-hits. Artillery always detonates on terrain rather
+    /// than bouncing.
     pub fn artillery_shot(
         id: EntityId,
         owner: ShotOwner,
@@ -130,9 +166,16 @@ impl Entity {
         vel: Vec2,
         facing: f32,
         accel: Vec2,
+        bbox: f32,
+        ttl: f32,
+        source: Option<EntityId>,
     ) -> Self {
         let mut e = Self::shot(id, owner, pos, vel, facing);
         e.accel = accel;
+        e.bbox = bbox;
+        e.ttl = Some(ttl);
+        e.source = source;
+        e.detonates_on_terrain = true;
         e
     }
 
@@ -153,6 +196,8 @@ impl Entity {
             damage_timer: 0.0,
             thrusting: false,
             accel: Vec2::ZERO,
+            source: None,
+            detonates_on_terrain: false,
         }
     }
 
@@ -176,6 +221,8 @@ impl Entity {
             damage_timer: 0.0,
             thrusting: false,
             accel: Vec2::ZERO,
+            source: None,
+            detonates_on_terrain: false,
         }
     }
 

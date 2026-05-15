@@ -188,15 +188,28 @@ impl DamageSmoker {
         }
     }
 
-    pub fn note_health(&mut self, id: EntityId, pos: Vec2, hp: i16, max_hp: i16, dt: f32) {
-        if max_hp <= 0 || hp >= max_hp {
+    /// Emit smoke whose rate scales with the fraction of HP missing.
+    /// `intensity` is a per-entity multiplier on the rate so different
+    /// hostile classes can read at different smoke densities without
+    /// duplicating the bookkeeping — e.g. tanks pass < 1.0 to keep the
+    /// "a little bit of smoke" feel while a player ship trails heavier.
+    pub fn note_health(
+        &mut self,
+        id: EntityId,
+        pos: Vec2,
+        hp: i16,
+        max_hp: i16,
+        intensity: f32,
+        dt: f32,
+    ) {
+        if max_hp <= 0 || hp >= max_hp || intensity <= 0.0 {
             self.accumulator.remove(&id);
             return;
         }
         let missing = (max_hp - hp).max(0) as f32 / max_hp as f32;
-        // 0–20 puffs/s depending on how hurt we are. Healthy ship → 0;
-        // last sliver of HP → constant heavy smoke.
-        let rate = 6.0 + missing * 16.0;
+        // 0–20 puffs/s depending on how hurt we are, scaled by intensity.
+        // Healthy → 0; last sliver of HP → constant heavy smoke.
+        let rate = (6.0 + missing * 16.0) * intensity;
         let emits;
         {
             let acc = self.accumulator.entry(id).or_insert(0.0);

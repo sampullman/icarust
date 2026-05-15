@@ -11,7 +11,10 @@ use crate::physics;
 use crate::player::{
     self, PLAYER_REGEN_DELAY, PLAYER_REGEN_INTERVAL, PLAYER_SHOT_TIME, SHOT_SPEED,
 };
-use crate::tank::{self, TANK_GROUND_OFFSET, TANK_SHOT_GRAVITY, TANK_SHOT_SPEED, TANK_SHOT_TIME};
+use crate::tank::{
+    self, TANK_GROUND_OFFSET, TANK_SHELL_LIFE, TANK_SHOT_BBOX, TANK_SHOT_GRAVITY,
+    TANK_SHOT_SPEED, TANK_SHOT_TIME,
+};
 use crate::terrain::{self, TerrainBand};
 use crate::util::{self, Vec2};
 
@@ -28,9 +31,10 @@ pub const WORLD_WIDTH: f32 = 3200.0;
 /// scrolls vertically as the player climbs.
 pub const VIEW_HEIGHT: f32 = 540.0;
 /// Total play-area height in world units. Y-up: `0` is the world floor
-/// (ground band sits at `[0, GROUND_HEIGHT]`) and `WORLD_HEIGHT` is the
-/// ceiling. We extend the world one viewport above the base play area so
-/// pilots have ~`VIEW_HEIGHT` of vertical headroom to climb into.
+/// (the ground band's surface sits in `[GROUND_MIN_HEIGHT,
+/// GROUND_MAX_HEIGHT]`) and `WORLD_HEIGHT` is the ceiling. We extend
+/// the world one viewport above the base play area so pilots have
+/// ~`VIEW_HEIGHT` of vertical headroom to climb into.
 pub const WORLD_HEIGHT: f32 = VIEW_HEIGHT * 2.0;
 
 /// Default spawn altitude. Sits roughly in the middle of the base viewport
@@ -92,6 +96,7 @@ pub struct World {
 impl World {
     pub fn new(config: WorldConfig) -> Self {
         let rng = ChaCha8Rng::seed_from_u64(config.seed);
+        let terrain = terrain::default_terrain(config.world_size.x, config.seed);
         let mut world = World {
             config,
             rng,
@@ -101,7 +106,7 @@ impl World {
             players: BTreeMap::new(),
             score_by_player: BTreeMap::new(),
             level: 1,
-            terrain: terrain::default_terrain(),
+            terrain,
         };
         world.spawn_level_hostiles();
         world
@@ -323,11 +328,16 @@ impl World {
             .map(|(id, _)| *id)
             .collect();
         let mut tank_shots: Vec<Entity> = Vec::new();
+        // Current sim time used to drive each tank's dodge oscillator. The
+        // per-entity offset (id * 0.83) keeps neighbouring tanks out of
+        // phase so they don't sway in lockstep.
+        let now = self.tick.0 as f32 * dt;
         for eid in tank_eids {
             let Some(entity) = self.entities.get_mut(&eid) else {
                 continue;
             };
             let target = nearest_target(entity.pos, &player_targets, world_width);
+            let dodge_phase = now + eid.0 as f32 * 0.83;
             let step = tank::step(
                 entity.pos,
                 entity.vel,
@@ -335,6 +345,7 @@ impl World {
                 entity.turret_facing,
                 target,
                 world_width,
+                dodge_phase,
                 dt,
             );
             entity.vel = step.vel;
@@ -351,7 +362,7 @@ impl World {
                 let spawn_pos = entity.pos + direction * (entity.bbox + 6.0);
                 let shot_id = EntityId(self.next_entity_id);
                 self.next_entity_id += 1;
-                let owner = ShotOwner::Enemy;
+                let owner = ShotOwner::Tank;
                 let shell = Entity::artillery_shot(
                     shot_id,
                     owner,
@@ -359,6 +370,9 @@ impl World {
                     direction * TANK_SHOT_SPEED,
                     entity.turret_facing,
                     Vec2::new(0.0, -TANK_SHOT_GRAVITY),
+                    TANK_SHOT_BBOX,
+                    TANK_SHELL_LIFE,
+                    Some(eid),
                 );
                 events.push(GameEvent::ShotFired { owner, pos: spawn_pos });
                 tank_shots.push(shell);
@@ -371,11 +385,15 @@ impl World {
         // 2. Move + wrap + per-kind extras.
         // X is toroidal (you can fly off the right edge and come in on
         // the left). Y is a hard wall — players clamp against it and
-        // enemies/shots bounce. Shots bounce off the terrain surface
-        // rather than the bare bottom of the world so they ricochet
-        // visibly off the ground.
+        // enemies/shots bounce. Shots and enemies bounce off the local
+        // terrain surface (per-x height) so ricochets follow the hills
+        // rather than tracking a global max height. Shots flagged with
+        // `detonates_on_terrain` (artillery) detonate instead of bouncing;
+        // their impact positions are collected and emitted as
+        // `ShellExploded` events after the loop so the borrow stays
+        // simple inside.
         let world_size = self.config.world_size;
-        let surface = terrain::surface_y(&self.terrain);
+        let mut detonations: Vec<Vec2> = Vec::new();
         for entity in self.entities.values_mut() {
             if !entity.alive {
                 continue;
@@ -389,9 +407,23 @@ impl World {
                     entity.vel = player::apply_forces(entity.vel, dt);
                 }
                 EntityKind::Shot { .. } => {
-                    // Bounce off the top of the terrain (plus the shot's
-                    // own radius) so it doesn't sink in before reflecting.
+                    let surface = terrain::surface_y_at(entity.pos.x, &self.terrain);
                     let floor = surface + entity.bbox;
+                    if entity.detonates_on_terrain && entity.pos.y <= floor {
+                        // Pin the boom to the impact point on the surface
+                        // (entity.pos.x, ground top) so the client renders
+                        // the explosion sitting on the hill rather than
+                        // half-buried, and kill the shell. The collision
+                        // pass after the loop won't try to also damage
+                        // anything because `alive = false`.
+                        let impact = Vec2::new(entity.pos.x, surface);
+                        entity.alive = false;
+                        detonations.push(impact);
+                        continue;
+                    }
+                    // Standard bullet: bounce off the local top-of-terrain
+                    // (plus the shot's own radius) so it doesn't sink in
+                    // before reflecting.
                     util::bounce_y(&mut entity.pos, &mut entity.vel, floor, world_size.y);
                     // Apply any per-shot acceleration (tank shells use
                     // this for gravity). Done after bounce so the bounce
@@ -407,9 +439,10 @@ impl World {
                     }
                 }
                 EntityKind::Enemy => {
-                    // Enemies bounce off the same surface as shots so they
-                    // can skim along the ground without sinking through it.
-                    let floor = surface + entity.bbox;
+                    // Enemies bounce off the same local surface as shots
+                    // so they skim along hills instead of tracking the
+                    // tallest peak in the world.
+                    let floor = terrain::surface_y_at(entity.pos.x, &self.terrain) + entity.bbox;
                     util::bounce_y(&mut entity.pos, &mut entity.vel, floor, world_size.y);
                 }
                 EntityKind::Tank => {
@@ -425,6 +458,9 @@ impl World {
                     entity.vel.y = 0.0;
                 }
             }
+        }
+        for pos in detonations.drain(..) {
+            events.push(GameEvent::ShellExploded { pos });
         }
 
         // 2b. Terrain. A player whose hitbox dips into a terrain band
@@ -497,13 +533,14 @@ impl World {
                 _ => continue,
             };
             // Pin the impact point to the player's X but the band's
-            // surface Y so the client can draw the boom sitting on the
-            // ground rather than half-buried.
+            // local surface Y so the client can draw the boom sitting
+            // on the ground rather than half-buried (and so explosions
+            // land on the hillside, not the highest peak in the world).
             let surface_y = self
                 .terrain
                 .iter()
                 .filter(|b| b.kind == kind)
-                .map(|b| b.top_y)
+                .map(|b| b.profile.height_at(entity.pos.x))
                 .fold(0.0_f32, f32::max);
             let pos = Vec2::new(entity.pos.x, surface_y);
             entity.alive = false;
@@ -545,7 +582,10 @@ impl World {
         let enemy_shot_ids: Vec<EntityId> = self
             .entities
             .iter()
-            .filter(|(_, e)| matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Enemy }) && e.alive)
+            .filter(|(_, e)| match e.kind {
+                EntityKind::Shot { owner } => owner.is_hostile() && e.alive,
+                _ => false,
+            })
             .map(|(id, _)| *id)
             .collect();
 
@@ -581,7 +621,7 @@ impl World {
                     pos: player_pos,
                     cause: DeathCause::Enemy,
                 });
-                events.push(GameEvent::EnemyKilled { pos, killer: pid });
+                events.push(GameEvent::EnemyKilled { pos, killer: Some(pid) });
             }
         }
 
@@ -615,7 +655,7 @@ impl World {
                 if h.hp <= 0 {
                     h.alive = false;
                     *self.score_by_player.entry(owner_pid).or_insert(0) += 1;
-                    events.push(GameEvent::EnemyKilled { pos, killer: owner_pid });
+                    events.push(GameEvent::EnemyKilled { pos, killer: Some(owner_pid) });
                 } else {
                     let hp_remaining = h.hp;
                     events.push(GameEvent::EnemyDamaged { pos, hp: hp_remaining });
@@ -624,9 +664,13 @@ impl World {
             }
         }
 
-        // Enemy shot ↔ player: shot dies; player loses one HP and only
-        // dies when HP hits zero. Repeat hits within `PLAYER_REGEN_DELAY`
-        // stack, so a focused volley will still drop the pilot.
+        // Hostile shot ↔ player: shot dies; player loses HP based on the
+        // shot's owner (`ShotOwner::damage`). Repeat hits within
+        // `PLAYER_REGEN_DELAY` stack, so a focused volley still drops the
+        // pilot. Tank shells deal more per hit, so a single shell can
+        // remove a chunk of HP — and they also emit a `ShellExploded`
+        // event so the client can render the boom on top of the damage
+        // feedback.
         for shot_id in &enemy_shot_ids {
             for player_id in &player_ids {
                 let hit = match (self.entities.get(shot_id), self.entities.get(player_id)) {
@@ -642,13 +686,22 @@ impl World {
                     Some(EntityKind::Player { player_id }) => player_id,
                     _ => continue,
                 };
+                let (damage, is_shell, shot_pos) = match self.entities.get(shot_id) {
+                    Some(s) => match s.kind {
+                        EntityKind::Shot { owner } => {
+                            (owner.damage(), matches!(owner, ShotOwner::Tank), s.pos)
+                        }
+                        _ => (1, false, s.pos),
+                    },
+                    _ => continue,
+                };
                 if let Some(s) = self.entities.get_mut(shot_id) {
                     s.alive = false;
                 }
                 let Some(p) = self.entities.get_mut(player_id) else {
                     continue;
                 };
-                p.hp -= 1;
+                p.hp = p.hp.saturating_sub(damage);
                 p.damage_timer = 0.0;
                 let pos = p.pos;
                 if p.hp <= 0 {
@@ -665,6 +718,63 @@ impl World {
                         hp: p.hp,
                     });
                 }
+                if is_shell {
+                    events.push(GameEvent::ShellExploded { pos: shot_pos });
+                }
+                break;
+            }
+        }
+
+        // Tank shell ↔ other hostile: friendly fire. A shell that lands
+        // on another tank or ship enemy detonates and deducts HP using
+        // the same damage curve as a hit on the player. The shell skips
+        // the entity that fired it (via `source`) so a freshly-spawned
+        // shell can't detonate on its own chassis. Friendly-fire kills
+        // emit `EnemyKilled` with `killer: None` so the score logic
+        // ignores them — only player-fired shots and rams credit a
+        // score.
+        let shell_ids: Vec<EntityId> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| {
+                matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Tank }) && e.alive
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for shell_id in &shell_ids {
+            let (shell_source, shell_pos, shell_bbox) = match self.entities.get(shell_id) {
+                Some(s) if s.alive => (s.source, s.pos, s.bbox),
+                _ => continue,
+            };
+            for hostile_id in &hostile_ids {
+                if Some(*hostile_id) == shell_source {
+                    continue;
+                }
+                let hit = match self.entities.get(hostile_id) {
+                    Some(h) if h.alive => {
+                        physics::circles_overlap(shell_pos, shell_bbox, h.pos, h.bbox)
+                    }
+                    _ => false,
+                };
+                if !hit {
+                    continue;
+                }
+                if let Some(s) = self.entities.get_mut(shell_id) {
+                    s.alive = false;
+                }
+                let Some(h) = self.entities.get_mut(hostile_id) else {
+                    continue;
+                };
+                h.hp = h.hp.saturating_sub(ShotOwner::Tank.damage());
+                let pos = h.pos;
+                if h.hp <= 0 {
+                    h.alive = false;
+                    events.push(GameEvent::EnemyKilled { pos, killer: None });
+                } else {
+                    let hp_remaining = h.hp;
+                    events.push(GameEvent::EnemyDamaged { pos, hp: hp_remaining });
+                }
+                events.push(GameEvent::ShellExploded { pos: shell_pos });
                 break;
             }
         }
@@ -877,8 +987,10 @@ mod tests {
             .filter(|e| matches!(e.kind, EntityKind::Tank))
             .collect();
         assert_eq!(tanks.len(), TANKS_PER_LEVEL_BASE as usize);
-        let ground = terrain::ground_surface_at(0.0, world.terrain());
         for t in &tanks {
+            // Tanks sit at the local surface height + the chassis offset;
+            // with hilly terrain that's an X-dependent value.
+            let ground = terrain::ground_surface_at(t.pos.x, world.terrain());
             assert!(
                 (t.pos.y - (ground + crate::tank::TANK_GROUND_OFFSET)).abs() < 1e-3,
                 "tank should sit on the ground surface, got y={}",
@@ -887,6 +999,158 @@ mod tests {
             assert_eq!(t.hp, crate::tank::TANK_HP);
             assert_eq!(t.max_hp, crate::tank::TANK_HP);
         }
+    }
+
+    #[test]
+    fn tank_shell_explodes_on_terrain() {
+        // Drop a shell moving straight down with detonates_on_terrain set;
+        // it should die and emit a ShellExploded event instead of
+        // bouncing.
+        let mut world = World::new(WorldConfig::default());
+        // Strip out hostiles + players so only the injected shell is around.
+        world.entities.clear();
+        let shell_id = world.alloc_id();
+        let shell_x = WORLD_WIDTH * 0.5;
+        let ground_y = terrain::ground_surface_at(shell_x, world.terrain());
+        let start = Vec2::new(shell_x, ground_y + 40.0);
+        let shell = Entity::artillery_shot(
+            shell_id,
+            ShotOwner::Tank,
+            start,
+            Vec2::new(0.0, -400.0),
+            std::f32::consts::PI,
+            Vec2::new(0.0, -crate::tank::TANK_SHOT_GRAVITY),
+            crate::tank::TANK_SHOT_BBOX,
+            crate::tank::TANK_SHELL_LIFE,
+            None,
+        );
+        world.entities.insert(shell_id, shell);
+        let mut detonated = false;
+        for _ in 0..30 {
+            let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+            if evs.iter().any(|e| matches!(e, GameEvent::ShellExploded { .. })) {
+                detonated = true;
+                break;
+            }
+        }
+        assert!(detonated, "shell should explode on terrain instead of bouncing");
+        assert!(
+            world.entities.get(&shell_id).is_none(),
+            "shell should be cleared from the world after detonation"
+        );
+    }
+
+    #[test]
+    fn tank_shell_friendly_fires_other_tank() {
+        // Park two tanks side by side, drop a shell on top of tank B with
+        // `source = A`. The shell should damage B and not credit anyone
+        // for the kill.
+        let mut world = World::new(WorldConfig::default());
+        world.entities.retain(|_, e| !matches!(e.kind, EntityKind::Tank | EntityKind::Enemy));
+        let pid = PlayerId(0);
+        world.add_player(pid);
+
+        let a_x = WORLD_WIDTH * 0.5 - 200.0;
+        let b_x = WORLD_WIDTH * 0.5 + 200.0;
+        let a_pos = Vec2::new(a_x, terrain::ground_surface_at(a_x, world.terrain()) + crate::tank::TANK_GROUND_OFFSET);
+        let b_pos = Vec2::new(b_x, terrain::ground_surface_at(b_x, world.terrain()) + crate::tank::TANK_GROUND_OFFSET);
+        let tank_a = world.alloc_id();
+        let tank_b = world.alloc_id();
+        let mut a = Entity::tank(tank_a, a_pos);
+        let mut b = Entity::tank(tank_b, b_pos);
+        // Keep them from auto-firing during the test.
+        a.shot_cooldown = 100.0;
+        b.shot_cooldown = 100.0;
+        world.entities.insert(tank_a, a);
+        world.entities.insert(tank_b, b);
+
+        // Inject a stationary shell overlapping tank B but well above
+        // the terrain floor (TANK_SHOT_BBOX = 9), so the terrain-detonate
+        // check doesn't claim it before the friendly-fire pass. The
+        // shell is sourced from tank A, so it should hit B and skip A.
+        let shell_id = world.alloc_id();
+        let shell = Entity::artillery_shot(
+            shell_id,
+            ShotOwner::Tank,
+            b_pos + Vec2::new(0.0, 12.0),
+            Vec2::ZERO,
+            0.0,
+            Vec2::ZERO,
+            crate::tank::TANK_SHOT_BBOX,
+            crate::tank::TANK_SHELL_LIFE,
+            Some(tank_a),
+        );
+        world.entities.insert(shell_id, shell);
+
+        let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        let dmg_or_kill = evs.iter().find(|e| {
+            matches!(e, GameEvent::EnemyDamaged { .. } | GameEvent::EnemyKilled { .. })
+        });
+        assert!(dmg_or_kill.is_some(), "shell should damage tank B");
+        // Score must not change — friendly fire doesn't credit a player.
+        assert_eq!(world.score(pid), 0);
+        // Tank A should be untouched (no self-damage).
+        assert_eq!(
+            world.entities.get(&tank_a).map(|t| t.hp),
+            Some(crate::tank::TANK_HP),
+            "shell source must not self-damage"
+        );
+    }
+
+    #[test]
+    fn tank_shell_deals_more_damage_than_enemy_bullet() {
+        // Inject one tank shell and one enemy bullet, both overlapping
+        // the player, and confirm the shell deducts two HP while the
+        // bullet deducts one. Locks the `ShotOwner::damage()` mapping
+        // through the live collision path.
+        let mut world = World::new(WorldConfig::default());
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        // Wipe hostiles so they don't interfere with the injected shots.
+        world.entities.retain(|_, e| matches!(e.kind, EntityKind::Player { .. }));
+        let player_eid = *world.players.get(&pid).unwrap();
+        let starting_hp = world.entities.get(&player_eid).unwrap().hp;
+        let player_pos = world.entities.get(&player_eid).unwrap().pos;
+
+        // Tank shell — wider hitbox + 2 damage. `source: None` so the
+        // shell doesn't accidentally match an entity ID.
+        let shell_id = world.alloc_id();
+        let shell = Entity::artillery_shot(
+            shell_id,
+            ShotOwner::Tank,
+            player_pos,
+            Vec2::ZERO,
+            0.0,
+            Vec2::ZERO,
+            crate::tank::TANK_SHOT_BBOX,
+            crate::tank::TANK_SHELL_LIFE,
+            None,
+        );
+        world.entities.insert(shell_id, shell);
+
+        let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        let dmg = evs.iter().find_map(|e| match e {
+            GameEvent::PlayerDamaged { hp, .. } => Some(*hp),
+            _ => None,
+        });
+        assert_eq!(
+            dmg,
+            Some(starting_hp - 2),
+            "tank shell should deal 2 HP of damage"
+        );
+
+        // Now an ordinary enemy bullet — should chip exactly 1 HP.
+        let player_pos = world.entities.get(&player_eid).unwrap().pos;
+        let bullet_id = world.alloc_id();
+        let bullet = Entity::shot(bullet_id, ShotOwner::Enemy, player_pos, Vec2::ZERO, 0.0);
+        world.entities.insert(bullet_id, bullet);
+        let before = world.entities.get(&player_eid).unwrap().hp;
+        let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        let dmg = evs.iter().find_map(|e| match e {
+            GameEvent::PlayerDamaged { hp, .. } => Some(*hp),
+            _ => None,
+        });
+        assert_eq!(dmg, Some(before - 1), "ship bullet should deal 1 HP of damage");
     }
 
     #[test]
@@ -900,8 +1164,11 @@ mod tests {
         world.add_player(pid);
         world.entities.retain(|_, e| !matches!(e.kind, EntityKind::Tank));
 
-        let ground = terrain::ground_surface_at(0.0, world.terrain());
-        let tank_pos = Vec2::new(WORLD_WIDTH * 0.5 + 300.0, ground + crate::tank::TANK_GROUND_OFFSET);
+        // Sample ground at the tank's X (terrain is now hilly), so the
+        // injected shot lands at the same Y the tank gets pinned to.
+        let tank_x = WORLD_WIDTH * 0.5 + 300.0;
+        let ground = terrain::ground_surface_at(tank_x, world.terrain());
+        let tank_pos = Vec2::new(tank_x, ground + crate::tank::TANK_GROUND_OFFSET);
         let tank_id = world.alloc_id();
         let mut tank = Entity::tank(tank_id, tank_pos);
         tank.shot_cooldown = 10.0; // don't return fire during the test
@@ -935,7 +1202,7 @@ mod tests {
         let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
         let killed = evs
             .iter()
-            .any(|e| matches!(e, GameEvent::EnemyKilled { killer, .. } if *killer == pid));
+            .any(|e| matches!(e, GameEvent::EnemyKilled { killer: Some(k), .. } if *k == pid));
         assert!(killed, "second hit should kill the tank");
         assert!(world.entities.get(&tank_id).is_none(), "tank should be cleared");
     }
@@ -950,7 +1217,8 @@ mod tests {
         world.add_player(pid);
         world.entities.retain(|_, e| !matches!(e.kind, EntityKind::Tank));
         let tank_id = world.alloc_id();
-        let tank_pos = Vec2::new(WORLD_WIDTH * 0.5, terrain::GROUND_HEIGHT + crate::tank::TANK_GROUND_OFFSET);
+        let ground_y = terrain::ground_surface_at(WORLD_WIDTH * 0.5, world.terrain());
+        let tank_pos = Vec2::new(WORLD_WIDTH * 0.5, ground_y + crate::tank::TANK_GROUND_OFFSET);
         let mut tank = Entity::tank(tank_id, tank_pos);
         tank.turret_facing = 0.0; // straight up
         tank.shot_cooldown = 0.0;
@@ -967,12 +1235,11 @@ mod tests {
         let mut shell_id: Option<EntityId> = None;
         for _ in 0..300 {
             let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
-            if evs.iter().any(|e| matches!(e, GameEvent::ShotFired { owner: ShotOwner::Enemy, .. })) {
-                // Find the newest enemy shot — should be the tank shell.
+            if evs.iter().any(|e| matches!(e, GameEvent::ShotFired { owner: ShotOwner::Tank, .. })) {
                 shell_id = world
                     .entities_map()
                     .iter()
-                    .filter(|(_, e)| matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Enemy }))
+                    .filter(|(_, e)| matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Tank }))
                     .map(|(id, _)| *id)
                     .max();
                 break;
@@ -1040,7 +1307,7 @@ mod tests {
             let evs = world.tick(&inputs, crate::TICK_DT);
             if evs
                 .iter()
-                .any(|e| matches!(e, GameEvent::EnemyKilled { killer, .. } if *killer == pid))
+                .any(|e| matches!(e, GameEvent::EnemyKilled { killer: Some(k), .. } if *k == pid))
             {
                 killed = true;
                 break;
@@ -1141,10 +1408,13 @@ mod tests {
         let pid = PlayerId(0);
         world.add_player(pid);
         let player_eid = *world.players.get(&pid).unwrap();
-        let player = world.entities.get_mut(&player_eid).unwrap();
         // bbox (12) + a sliver: with no movement this tick the bottom
-        // of the hitbox sits just inside the ground.
-        player.pos = Vec2::new(WORLD_WIDTH * 0.5, terrain::GROUND_HEIGHT + 11.0);
+        // of the hitbox sits just inside the ground. Sample the ground
+        // before grabbing the mutable player borrow so they don't
+        // overlap on `world`.
+        let ground_y = terrain::ground_surface_at(WORLD_WIDTH * 0.5, world.terrain());
+        let player = world.entities.get_mut(&player_eid).unwrap();
+        player.pos = Vec2::new(WORLD_WIDTH * 0.5, ground_y + 11.0);
         player.vel = Vec2::ZERO;
 
         let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
@@ -1170,7 +1440,9 @@ mod tests {
         // Manually inject a downward shot at a known height; tick.
         let id = world.alloc_id();
         let owner = ShotOwner::Player(PlayerId(99));
-        let start = Vec2::new(WORLD_WIDTH * 0.5, terrain::GROUND_HEIGHT + 40.0);
+        let shot_x = WORLD_WIDTH * 0.5;
+        let ground_y = terrain::ground_surface_at(shot_x, world.terrain());
+        let start = Vec2::new(shot_x, ground_y + 40.0);
         let vel = Vec2::new(0.0, -400.0);
         world.entities.insert(
             id,
@@ -1182,7 +1454,8 @@ mod tests {
             // Stop as soon as it's reflected upward.
             if let Some(s) = world.entities.get(&id) {
                 if s.vel.y > 0.0 {
-                    let floor = terrain::GROUND_HEIGHT + s.bbox;
+                    let local = terrain::surface_y_at(s.pos.x, world.terrain());
+                    let floor = local + s.bbox;
                     assert!(
                         s.pos.y >= floor - 1.0,
                         "shot should bounce above the terrain surface, got pos.y={}",

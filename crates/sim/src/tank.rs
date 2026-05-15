@@ -54,14 +54,35 @@ pub const TANK_APPROACH_DIST: f32 = 520.0;
 /// infrequent threat rather than a stream of bullets.
 pub const TANK_SHOT_TIME: f32 = 2.2;
 /// Muzzle velocity (units/s) — faster than the ship enemy's 260 so the
-/// shells reach across the play area before gravity drops them.
-pub const TANK_SHOT_SPEED: f32 = 460.0;
+/// shells reach across the play area before gravity drops them. Tuned
+/// up from the original 460 so a shell's first arc carries it further
+/// before the player can simply outrun it.
+pub const TANK_SHOT_SPEED: f32 = 540.0;
+/// Lifetime override for tank shells. The default `SHOT_LIFE` (2s)
+/// expires partway through a steep arc, so artillery is given a longer
+/// budget. In practice most shells die earlier by detonating on
+/// terrain or impact; this just keeps a high-arc shell airborne long
+/// enough to finish its parabola.
+pub const TANK_SHELL_LIFE: f32 = 5.0;
 /// Magnitude of downward acceleration applied to tank shells (Y-up
 /// world; the world stores this as `Vec2::new(0, -mag)` in the shell's
 /// `accel`).
 pub const TANK_SHOT_GRAVITY: f32 = 240.0;
+/// Hit radius for tank shells — wider than the default `SHOT_BBOX` so
+/// the heavy shell reads as bigger on screen *and* lands hits that a
+/// pinpoint ship bullet would miss. Damage value is selected via the
+/// `ShotOwner::Tank` variant.
+pub const TANK_SHOT_BBOX: f32 = 9.0;
 /// Tank starts at full armor; takes two shots to crack.
 pub const TANK_HP: i16 = 2;
+
+/// Lateral acceleration (units/s²) applied while the tank is in firing
+/// range. Combined with `TANK_DODGE_FREQ` this produces a small
+/// side-to-side sway that simulates the chassis weaving to dodge shots
+/// even when it has nothing else to do.
+pub const TANK_DODGE_ACCEL: f32 = 220.0;
+/// Angular frequency (radians/s) of the dodge sway. Period ≈ 2π / FREQ.
+pub const TANK_DODGE_FREQ: f32 = 1.7;
 
 /// One AI step result.
 #[derive(Debug, Clone, Copy)]
@@ -85,6 +106,10 @@ pub struct TankStep {
 /// `target` is `None` when there are no live players — the tank idles
 /// (drag-only, no fire). `world_width` is needed to handle toroidal
 /// X-wrap when computing the shortest path to the target.
+///
+/// `dodge_phase` is a per-tank scalar (seconds plus a per-entity offset)
+/// that drives the in-range side-to-side sway. The caller derives it so
+/// every tank weaves on its own rhythm.
 pub fn step(
     pos: Vec2,
     vel: Vec2,
@@ -92,6 +117,7 @@ pub fn step(
     turret_facing: f32,
     target: Option<Vec2>,
     world_width: f32,
+    dodge_phase: f32,
     dt: f32,
 ) -> TankStep {
     let Some(target_pos) = target else {
@@ -118,8 +144,21 @@ pub fn step(
         // doesn't try to face a target overhead.
         new_body = if dir >= 0.0 { FRAC_PI_2 } else { -FRAC_PI_2 };
     } else {
-        // Within range — bleed off any rolling momentum.
-        new_vel.x *= (1.0 - TANK_DRAG * dt).max(0.0);
+        // Within range — instead of just braking, weave side to side so
+        // the tank simulates dodging fire from above. Drag is still
+        // applied (with half its strength so the sway has room to
+        // build) and `TANK_DODGE_ACCEL` injects a sinusoidal lateral
+        // force keyed to the per-tank phase.
+        let sway = (dodge_phase * TANK_DODGE_FREQ).sin() * TANK_DODGE_ACCEL;
+        new_vel.x += sway * dt;
+        new_vel.x *= (1.0 - TANK_DRAG * 0.5 * dt).max(0.0);
+        // Keep the chassis facing the side it's currently moving
+        // toward so the asymmetric hull silhouette matches the motion.
+        // Tiny speeds inherit the previous body angle to avoid flicker
+        // at the dodge zero-crossing.
+        if new_vel.x.abs() > 6.0 {
+            new_body = if new_vel.x >= 0.0 { FRAC_PI_2 } else { -FRAC_PI_2 };
+        }
     }
     // Cap horizontal speed. Vertical movement is zeroed: the chassis
     // sits on the terrain and the caller pins its Y every tick.
@@ -204,7 +243,7 @@ mod tests {
     fn rolls_toward_target_when_far_right() {
         let pos = Vec2::new(0.0, 16.0);
         let target = Vec2::new(TANK_APPROACH_DIST + 200.0, 100.0);
-        let s = step(pos, Vec2::ZERO, 0.0, 0.0, Some(target), 3200.0, 1.0 / 60.0);
+        let s = step(pos, Vec2::ZERO, 0.0, 0.0, Some(target), 3200.0, 0.0, 1.0 / 60.0);
         assert!(s.vel.x > 0.0, "tank should accelerate right toward target");
         assert!(s.body_facing > 0.0, "body should face right");
     }
@@ -213,20 +252,22 @@ mod tests {
     fn rolls_toward_target_when_far_left() {
         let pos = Vec2::new(2000.0, 16.0);
         let target = Vec2::new(2000.0 - TANK_APPROACH_DIST - 200.0, 100.0);
-        let s = step(pos, Vec2::ZERO, 0.0, 0.0, Some(target), 3200.0, 1.0 / 60.0);
+        let s = step(pos, Vec2::ZERO, 0.0, 0.0, Some(target), 3200.0, 0.0, 1.0 / 60.0);
         assert!(s.vel.x < 0.0, "tank should accelerate left toward target");
         assert!(s.body_facing < 0.0, "body should face left");
     }
 
     #[test]
-    fn settles_in_firing_range() {
-        // Within approach distance — the tank should bleed velocity rather
-        // than keep accelerating.
+    fn dodges_while_in_firing_range() {
+        // Within approach distance, the dodge sway should produce a
+        // non-zero lateral velocity. Sample at a phase where sin > 0
+        // so the direction is unambiguous.
         let pos = Vec2::new(500.0, 16.0);
         let target = Vec2::new(700.0, 100.0); // dx = 200, inside approach
-        let initial = Vec2::new(40.0, 0.0);
-        let s = step(pos, initial, FRAC_PI_2, 0.0, Some(target), 3200.0, 1.0 / 60.0);
-        assert!(s.vel.x < initial.x, "tank should bleed velocity, got {}", s.vel.x);
+        // Phase chosen so `sin(phase * FREQ)` is comfortably positive.
+        let phase = std::f32::consts::FRAC_PI_2 / TANK_DODGE_FREQ;
+        let s = step(pos, Vec2::ZERO, FRAC_PI_2, 0.0, Some(target), 3200.0, phase, 1.0 / 60.0);
+        assert!(s.vel.x > 0.0, "tank should sway right at this phase, got {}", s.vel.x);
     }
 
     #[test]
@@ -235,7 +276,7 @@ mod tests {
         // the aim error should exceed the firing cone after one tick.
         let pos = Vec2::new(500.0, 16.0);
         let target = Vec2::new(900.0, 100.0);
-        let s = step(pos, Vec2::ZERO, FRAC_PI_2, 0.0, Some(target), 3200.0, 1.0 / 60.0);
+        let s = step(pos, Vec2::ZERO, FRAC_PI_2, 0.0, Some(target), 3200.0, 0.0, 1.0 / 60.0);
         assert!(!s.fire, "turret should still be slewing toward target");
     }
 
@@ -251,7 +292,7 @@ mod tests {
         let t = dist / TANK_SHOT_SPEED;
         let lead_y = 0.5 * TANK_SHOT_GRAVITY * t * t;
         let aim_angle = 0.0_f32.atan2(target.y - pos.y + lead_y); // 0 — straight up
-        let s = step(pos, Vec2::ZERO, FRAC_PI_2, aim_angle, Some(target), 3200.0, 1.0 / 60.0);
+        let s = step(pos, Vec2::ZERO, FRAC_PI_2, aim_angle, Some(target), 3200.0, 0.0, 1.0 / 60.0);
         assert!(s.fire, "turret should fire when aligned and in range");
     }
 
@@ -264,6 +305,7 @@ mod tests {
             0.5,
             None,
             3200.0,
+            0.0,
             1.0 / 60.0,
         );
         assert!(!s.fire);

@@ -30,8 +30,8 @@ use crate::net::Net;
 use crate::render::camera::{Camera, Point2};
 use crate::render::entities::{
     ship_wing_factor, EntityMeshes, ShipMesh, TankMesh, ENEMY_COLOR, ENEMY_SHOT_COLOR,
-    PLAYER_COLOR, PLAYER_SHOT_COLOR, TANK_COLOR, TANK_TREAD_BAND_Y, TANK_TREAD_HALF_WIDTH,
-    TANK_TREAD_LINK_COLOR, TANK_TREAD_LINK_SPACING, TANK_TURRET_PIVOT_Y,
+    PLAYER_COLOR, PLAYER_SHOT_COLOR, TANK_COLOR, TANK_SHOT_COLOR, TANK_TREAD_BAND_Y,
+    TANK_TREAD_HALF_WIDTH, TANK_TREAD_LINK_COLOR, TANK_TREAD_LINK_SPACING, TANK_TURRET_PIVOT_Y,
 };
 use crate::render::particles::{DamageSmoker, ThrustEmitter};
 use crate::render::sky::{Sky, SKY_COLOR};
@@ -93,6 +93,12 @@ fn visual_for_kind<'a>(meshes: &'a EntityMeshes, kind: &EntityKind) -> EntityVis
             mesh: &meshes.shot,
             tint: ENEMY_SHOT_COLOR,
         },
+        EntityKind::Shot {
+            owner: ShotOwner::Tank,
+        } => EntityVisual::Single {
+            mesh: &meshes.tank_shell,
+            tint: TANK_SHOT_COLOR,
+        },
     }
 }
 
@@ -119,11 +125,15 @@ fn extrapolated_pos(e: &EntityState, time_since_snapshot: f32) -> Vec2 {
 /// opposite side of the world seam. Kept generous so we never pop a
 /// sprite in late.
 fn sprite_half_extent(kind: &EntityKind) -> f32 {
+    use sim::entity::ShotOwner;
     match kind {
         EntityKind::Player { .. } | EntityKind::Enemy => 18.0,
         // Tank silhouette is widest at the cannon when the turret is
         // horizontal — about 22 world units from chassis center.
         EntityKind::Tank => 24.0,
+        EntityKind::Shot {
+            owner: ShotOwner::Tank,
+        } => 9.0,
         EntityKind::Shot { .. } => 6.0,
     }
 }
@@ -169,6 +179,10 @@ pub struct MainState {
     /// draw time than to reload art.
     meshes: EntityMeshes,
     sky: Sky,
+    /// Lazily-built terrain mesh + grass. Rebuilt when the server provides a new layout
+    /// today: never after the first snapshot, but the renderer compares signatures every
+    /// sync so it's safe.
+    terrain_renderer: render::terrain::TerrainRenderer,
     shot_sound_id: SoundId,
     hit_sound_id: SoundId,
     input: InputState,
@@ -235,7 +249,10 @@ impl MainState {
         let mut disconnected_text = TextWidget::new(ctx, &mut am, 24.0)?;
         disconnected_text.set_text("Connecting…", 24.0);
 
-        let ground_y = sim::terrain::GROUND_HEIGHT;
+        // Use the deepest valley as the camera's floor reference so the
+        // pilot can dive into low spots without the camera bottoming
+        // out on the tallest peak.
+        let ground_y = sim::terrain::GROUND_MIN_HEIGHT;
         let camera = Camera::new(
             drawable_w,
             drawable_h,
@@ -252,6 +269,7 @@ impl MainState {
             net,
             meshes,
             sky,
+            terrain_renderer: render::terrain::TerrainRenderer::empty(),
             shot_sound_id,
             hit_sound_id,
             input: InputState::default(),
@@ -277,7 +295,7 @@ impl MainState {
         })
     }
 
-    fn handle_server_msg(&mut self, ctx: &Context, msg: ServerMsg) {
+    fn handle_server_msg(&mut self, ctx: &mut Context, msg: ServerMsg) {
         match msg {
             ServerMsg::Welcome {
                 player_id,
@@ -286,17 +304,20 @@ impl MainState {
             } => {
                 self.local_player_id = Some(player_id);
                 self.camera
-                    .set_ground_y(sim::terrain::surface_y(&snapshot.terrain));
+                    .set_ground_y(sim::terrain::min_surface_y(&snapshot.terrain));
+                self.terrain_renderer.sync(ctx, &snapshot.terrain);
                 self.latest_snapshot = Some(snapshot);
                 self.time_since_snapshot = 0.0;
                 self.gui_dirty = true;
             }
             ServerMsg::Snapshot(snap) => {
-                // Terrain doesn't change today, but the camera's vertical
-                // clamp reads off `ground_y` so we refresh it here for the
-                // future case where the server hands us a new layout.
+                // Terrain doesn't change today, but both the camera clamp
+                // and the cached terrain mesh need to follow if a future
+                // server hands us a new layout. `sync` is a no-op when
+                // the terrain matches the cached signature.
                 self.camera
-                    .set_ground_y(sim::terrain::surface_y(&snap.terrain));
+                    .set_ground_y(sim::terrain::min_surface_y(&snap.terrain));
+                self.terrain_renderer.sync(ctx, &snap.terrain);
                 self.latest_snapshot = Some(snap);
                 self.time_since_snapshot = 0.0;
                 // If our entity is back in the world, we're alive again.
@@ -365,6 +386,14 @@ impl MainState {
                         self.game_over = true;
                         self.gui_dirty = true;
                     }
+                }
+                GameEvent::ShellExploded { pos } => {
+                    // Tank shells terminate in a chunky boom regardless
+                    // of whether they hit dirt, a tank, or the player.
+                    // Pair the dust-style explosion with the standard
+                    // hit sound so the impact lands audibly.
+                    self.spawn_explosion(Vec2::new(pos.x, pos.y), ExplosionStyle::DustAndEmbers);
+                    self.play_sound(ctx, self.hit_sound_id);
                 }
                 GameEvent::LevelUp(_) | GameEvent::PlayerJoined(_) | GameEvent::PlayerLeft(_) => {
                     self.gui_dirty = true;
@@ -658,16 +687,29 @@ impl EventHandler for MainState {
             }
             // Pump every player's thrust/smoke emitters every frame so
             // they stop cleanly when the ship dies or the flag flips.
+            // Tanks also smoke when damaged (lower intensity so the
+            // "a little bit of smoke" reads as battlefield damage rather
+            // than a death-spiral). Smoke is anchored to the turret
+            // dome so it puffs out of the hull top instead of the
+            // treads.
             for e in &snap.entities {
-                let EntityKind::Player { .. } = e.kind else {
-                    continue;
-                };
                 if !e.alive {
                     continue;
                 }
                 let pos = extrapolated_pos(e, time_since_snapshot);
-                self.thrust.note_thrust(e.id, pos, e.facing, dt, e.thrusting);
-                self.smoke.note_health(e.id, pos, e.hp, e.max_hp, dt);
+                match e.kind {
+                    EntityKind::Player { .. } => {
+                        self.thrust
+                            .note_thrust(e.id, pos, e.facing, dt, e.thrusting);
+                        self.smoke.note_health(e.id, pos, e.hp, e.max_hp, 1.0, dt);
+                    }
+                    EntityKind::Tank => {
+                        let smoke_pos = Vec2::new(pos.x, pos.y + TANK_TURRET_PIVOT_Y);
+                        self.smoke
+                            .note_health(e.id, smoke_pos, e.hp, e.max_hp, 0.55, dt);
+                    }
+                    _ => {}
+                }
             }
             // Forget particles for entities not in the snapshot. Linear
             // scan over the (small) entity list beats allocating a HashSet
@@ -715,8 +757,11 @@ impl EventHandler for MainState {
             // Background: cream sky + parallax clouds, behind everything.
             self.sky.draw(&mut canvas, &self.camera);
 
-            // Terrain underneath the play layer.
-            render::terrain::draw(&mut canvas, &self.camera, &snap.terrain);
+            // Terrain (soil polygon + horizon stripe + grass tufts)
+            // underneath the play layer. The renderer was synced from
+            // the latest snapshot in `handle_server_msg`, so we don't
+            // re-touch `snap.terrain` here.
+            self.terrain_renderer.draw(&mut canvas, &self.camera);
 
             // Thrust trails behind ships (drawn before the ships so the
             // flame appears to come out of the tail rather than over it).
@@ -906,7 +951,8 @@ pub fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
     let net = WebNet::connect(&url, name)
         .map_err(|e| wasm_bindgen::JsValue::from_str(&format!("WebNet::connect: {e:#}")))?;
 
-    let _ = build_ggez(None).run_with(move |ctx| MainState::new(ctx, Box::new(net) as Box<dyn Net>));
+    let _ =
+        build_ggez(None).run_with(move |ctx| MainState::new(ctx, Box::new(net) as Box<dyn Net>));
     Ok(())
 }
 
