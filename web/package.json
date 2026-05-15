@@ -6,9 +6,9 @@
   "scripts": {
     "build": "node build.mjs",
     "build:release": "node build.mjs --release",
-    "dev": "node build.mjs && vite",
-    "serve": "vite",
-    "preview": "vite preview"
+    "dev": "node build.mjs && vite --no-open",
+    "serve": "vite --no-open",
+    "preview": "vite preview --no-open"
   },
   "devDependencies": {
     "playwright": "^1.60.0",

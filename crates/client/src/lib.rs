@@ -38,10 +38,11 @@ use crate::render::sky::{Sky, SKY_COLOR};
 use crate::widget::TextWidget;
 
 /// Visible window onto the world, in world units. The world itself is
-/// larger (`sim::world::WORLD_WIDTH`) so the camera can scroll instead of
-/// jumping at the seam.
+/// larger in both axes (`sim::world::WORLD_WIDTH` and `WORLD_HEIGHT`) so
+/// the camera can scroll instead of jumping at the seam or pinning to a
+/// single altitude band.
 const VIEW_WIDTH: f32 = 1280.0;
-const VIEW_HEIGHT: f32 = sim::world::WORLD_HEIGHT;
+const VIEW_HEIGHT: f32 = sim::world::VIEW_HEIGHT;
 /// How quickly the camera homes in on the player each second. 8.0 is a
 /// good middle ground — responsive but doesn't snap.
 const CAMERA_FOLLOW_RATE: f32 = 8.0;
@@ -234,7 +235,16 @@ impl MainState {
         let mut disconnected_text = TextWidget::new(ctx, &mut am, 24.0)?;
         disconnected_text.set_text("Connecting…", 24.0);
 
-        let camera = Camera::new(drawable_w, drawable_h, world_w, world_h, VIEW_WIDTH, VIEW_HEIGHT);
+        let ground_y = sim::terrain::GROUND_HEIGHT;
+        let camera = Camera::new(
+            drawable_w,
+            drawable_h,
+            world_w,
+            world_h,
+            VIEW_WIDTH,
+            VIEW_HEIGHT,
+            ground_y,
+        );
 
         Ok(MainState {
             asset_manager: am,
@@ -275,11 +285,18 @@ impl MainState {
                 ..
             } => {
                 self.local_player_id = Some(player_id);
+                self.camera
+                    .set_ground_y(sim::terrain::surface_y(&snapshot.terrain));
                 self.latest_snapshot = Some(snapshot);
                 self.time_since_snapshot = 0.0;
                 self.gui_dirty = true;
             }
             ServerMsg::Snapshot(snap) => {
+                // Terrain doesn't change today, but the camera's vertical
+                // clamp reads off `ground_y` so we refresh it here for the
+                // future case where the server hands us a new layout.
+                self.camera
+                    .set_ground_y(sim::terrain::surface_y(&snap.terrain));
                 self.latest_snapshot = Some(snap);
                 self.time_since_snapshot = 0.0;
                 // If our entity is back in the world, we're alive again.

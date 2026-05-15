@@ -57,15 +57,24 @@ impl Sky {
         ];
 
         let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0xC10D_C10D_u64);
-        // Roughly one cloud per ~280 world units, so a 3200-wide world
-        // carries ~11 clouds — enough density without paving over the sky.
-        let count = ((world_size.x / 280.0).round() as usize).max(8);
+        // Cloud band: the bottom sits where pilots typically spawn so even
+        // grounded play sees clouds overhead; the top sits just under the
+        // world ceiling. `min(540, world.y)` pins the bottom to a fixed
+        // altitude even after the world gets taller, otherwise the lower
+        // band would drift up and out of the spawn view.
+        let cloud_bottom = world_size.y.min(540.0) * 0.5;
+        let cloud_top = world_size.y * 0.95;
+        let band_height = (cloud_top - cloud_bottom).max(1.0);
+        // Density: ~one cloud per (280 wide × 360 tall) world cell. Scaling
+        // with the cloud band's vertical extent keeps the sky from feeling
+        // empty after we extend the world upward.
+        let area_cells = (world_size.x / 280.0) * (band_height / 360.0);
+        let count = (area_cells.round() as usize).max(8);
         let mut clouds = Vec::with_capacity(count);
         for _ in 0..count {
             let stamp = rng.gen_range(0..stamps.len());
-            // Y range: roughly the top 60% of the world. Y-up coords, so
-            // the higher values are visually higher on screen.
-            let y = world_size.y * (0.55 + rng.gen::<f32>() * 0.40);
+            // Y-up coords: higher values draw visually higher on screen.
+            let y = cloud_bottom + rng.gen::<f32>() * band_height;
             let x = rng.gen::<f32>() * world_size.x;
             let scale = 0.85 + rng.gen::<f32>() * 0.55;
             // Tiny lateral drift so the sky isn't completely static. Half

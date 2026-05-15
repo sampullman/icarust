@@ -22,7 +22,21 @@ use crate::util::{self, Vec2};
 /// each entity in up to three positions (`x`, `x ± WORLD_WIDTH`) so the
 /// wrap is invisible from the player's perspective.
 pub const WORLD_WIDTH: f32 = 3200.0;
-pub const WORLD_HEIGHT: f32 = 540.0;
+/// Visible viewport height in world units. Fixed regardless of the actual
+/// display resolution — the screen just letterboxes or stretches to this
+/// aspect ratio. The world is taller (see `WORLD_HEIGHT`) so the camera
+/// scrolls vertically as the player climbs.
+pub const VIEW_HEIGHT: f32 = 540.0;
+/// Total play-area height in world units. Y-up: `0` is the world floor
+/// (ground band sits at `[0, GROUND_HEIGHT]`) and `WORLD_HEIGHT` is the
+/// ceiling. We extend the world one viewport above the base play area so
+/// pilots have ~`VIEW_HEIGHT` of vertical headroom to climb into.
+pub const WORLD_HEIGHT: f32 = VIEW_HEIGHT * 2.0;
+
+/// Default spawn altitude. Sits roughly in the middle of the base viewport
+/// so a fresh pilot sees the ground at the bottom of their screen instead
+/// of being dropped far above it. Used by `add_player` / `respawn_player`.
+pub const SPAWN_Y: f32 = VIEW_HEIGHT * 0.5;
 
 pub const SHOT_BBOX: f32 = 6.0;
 pub const SHOT_LIFE: f32 = 2.0;
@@ -137,17 +151,17 @@ impl World {
         self.players.contains_key(&player_id)
     }
 
-    /// Spawn a player at world center. No-op if already present.
-    /// Pushes any enemies inside `SAFE_SPAWN_RADIUS` out of the way so the
-    /// new ship isn't killed on the same tick it appears.
+    /// Spawn a player horizontally centered at `SPAWN_Y`. No-op if already
+    /// present. Pushes any enemies inside `SAFE_SPAWN_RADIUS` out of the
+    /// way so the new ship isn't killed on the same tick it appears.
     pub fn add_player(&mut self, player_id: PlayerId) -> Option<EntityId> {
         if self.players.contains_key(&player_id) {
             return None;
         }
         let id = self.alloc_id();
-        let center = self.config.world_size * 0.5;
-        self.clear_safe_zone(center, SAFE_SPAWN_RADIUS);
-        let entity = Entity::player(id, player_id, center);
+        let spawn = Vec2::new(self.config.world_size.x * 0.5, SPAWN_Y);
+        self.clear_safe_zone(spawn, SAFE_SPAWN_RADIUS);
+        let entity = Entity::player(id, player_id, spawn);
         self.entities.insert(id, entity);
         self.players.insert(player_id, id);
         self.score_by_player.entry(player_id).or_insert(0);
@@ -739,10 +753,11 @@ impl World {
         let mut chosen = Vec2::ZERO;
         for attempt in 0..MAX_ATTEMPTS {
             let x = util::rand_unit(&mut self.rng) * world.x;
-            // Vertical: bias toward the upper half so enemies approach
-            // from above rather than along the floor. Keep clear of the
-            // top/bottom margins so they're not pinned against a wall.
-            let y = 60.0 + util::rand_unit(&mut self.rng) * (world.y * 0.55);
+            // Vertical: spread across most of the playable altitude band
+            // so the camera's new vertical headroom actually carries
+            // enemies, not just empty sky. Keep clear of the top/bottom
+            // margins so they're not pinned against a wall.
+            let y = 60.0 + util::rand_unit(&mut self.rng) * (world.y - 120.0);
             let pos = Vec2::new(x, y);
             let safe = player_positions
                 .iter()
