@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -9,7 +9,8 @@ use crate::event::{DeathCause, GameEvent};
 use crate::input::PlayerInputs;
 use crate::physics;
 use crate::player::{
-    self, PLAYER_REGEN_DELAY, PLAYER_REGEN_INTERVAL, PLAYER_SHOT_TIME, SHOT_SPEED,
+    self, PLAYER_REGEN_DELAY, PLAYER_REGEN_INTERVAL, PLAYER_SHOT_TIME, RAM_DAMAGE_PER_SECOND,
+    SHOT_SPEED,
 };
 use crate::tank::{
     self, TANK_GROUND_OFFSET, TANK_SHELL_LIFE, TANK_SHOT_BBOX, TANK_SHOT_GRAVITY,
@@ -471,7 +472,7 @@ impl World {
         self.handle_terrain(&mut events);
 
         // 3. Collisions. Iteration is over BTreeMap so order is deterministic.
-        self.handle_collisions(&mut events);
+        self.handle_collisions(&mut events, dt);
 
         // 3b. HP regen for live players.
         self.handle_regen(dt);
@@ -552,7 +553,7 @@ impl World {
         }
     }
 
-    fn handle_collisions(&mut self, events: &mut Vec<GameEvent>) {
+    fn handle_collisions(&mut self, events: &mut Vec<GameEvent>, dt: f32) {
         // Treat ships and tanks as one bucket: both die from ramming the
         // player, and both lose HP from player shots (tanks just have
         // more HP to spend). New hostile kinds plug into the same logic
@@ -589,9 +590,16 @@ impl World {
             .map(|(id, _)| *id)
             .collect();
 
-        // Player ↔ hostile: ramming kills both. The player gets credit
-        // for the kill so suicide-runs still count. Hostile HP is ignored
-        // — a chassis impact at flight speed totals both ships regardless.
+        // Player ↔ hostile contact: continuous damage instead of instant
+        // kill. Each tick of overlap drains `RAM_DAMAGE_PER_SECOND * dt`
+        // off both sides; a full-HP pilot can therefore survive
+        // `player::RAM_DEATH_SECONDS` of constant contact before exploding.
+        // The same rate flows back into the hostile so a brief brush
+        // still wipes weak ships (1 HP) almost instantly while heavier
+        // chassis take proportionally longer to chew through.
+        let mut contacted_players: BTreeSet<EntityId> = BTreeSet::new();
+        let mut contacted_hostiles: BTreeSet<EntityId> = BTreeSet::new();
+        let dose = RAM_DAMAGE_PER_SECOND * dt;
         for hostile_id in &hostile_ids {
             for player_id in &player_ids {
                 let hit = match (self.entities.get(player_id), self.entities.get(hostile_id)) {
@@ -607,21 +615,85 @@ impl World {
                     Some(EntityKind::Player { player_id }) => player_id,
                     _ => continue,
                 };
-                let player_pos = self.entities.get(player_id).map(|p| p.pos).unwrap_or(Vec2::ZERO);
-                let pos = self.entities.get(hostile_id).map(|e| e.pos).unwrap_or(Vec2::ZERO);
+                contacted_players.insert(*player_id);
+                contacted_hostiles.insert(*hostile_id);
+
+                // Damage the hostile first so a frame that kills both still
+                // credits the player.
+                if let Some(h) = self.entities.get_mut(hostile_id) {
+                    if h.alive {
+                        h.contact_damage_accum += dose;
+                        let drop = h.contact_damage_accum.floor() as i16;
+                        if drop > 0 {
+                            h.contact_damage_accum -= drop as f32;
+                            h.hp = h.hp.saturating_sub(drop);
+                            let pos = h.pos;
+                            if h.hp <= 0 {
+                                h.alive = false;
+                                *self.score_by_player.entry(pid).or_insert(0) += 1;
+                                events.push(GameEvent::EnemyKilled {
+                                    pos,
+                                    killer: Some(pid),
+                                });
+                            } else {
+                                let hp_remaining = h.hp;
+                                events.push(GameEvent::EnemyDamaged {
+                                    pos,
+                                    hp: hp_remaining,
+                                });
+                            }
+                        }
+                    }
+                }
+
                 if let Some(p) = self.entities.get_mut(player_id) {
-                    p.alive = false;
+                    if !p.alive {
+                        continue;
+                    }
+                    // Suspend regen while in contact, even on ticks that
+                    // don't yet pop a whole HP.
+                    p.damage_timer = 0.0;
+                    p.contact_damage_accum += dose;
+                    let drop = p.contact_damage_accum.floor() as i16;
+                    if drop > 0 {
+                        p.contact_damage_accum -= drop as f32;
+                        p.hp = p.hp.saturating_sub(drop);
+                        let pos = p.pos;
+                        if p.hp <= 0 {
+                            p.alive = false;
+                            events.push(GameEvent::PlayerKilled {
+                                player_id: pid,
+                                pos,
+                                cause: DeathCause::Enemy,
+                            });
+                        } else {
+                            let hp_remaining = p.hp;
+                            events.push(GameEvent::PlayerDamaged {
+                                player_id: pid,
+                                pos,
+                                hp: hp_remaining,
+                            });
+                        }
+                    }
                 }
-                if let Some(e) = self.entities.get_mut(hostile_id) {
-                    e.alive = false;
+            }
+        }
+
+        // Players/hostiles that ended the tick without an overlapping
+        // partner reset their accumulator so a sequence of brief touches
+        // doesn't silently compound into a kill.
+        for id in &player_ids {
+            if !contacted_players.contains(id) {
+                if let Some(e) = self.entities.get_mut(id) {
+                    e.contact_damage_accum = 0.0;
                 }
-                *self.score_by_player.entry(pid).or_insert(0) += 1;
-                events.push(GameEvent::PlayerKilled {
-                    player_id: pid,
-                    pos: player_pos,
-                    cause: DeathCause::Enemy,
-                });
-                events.push(GameEvent::EnemyKilled { pos, killer: Some(pid) });
+            }
+        }
+        for id in &hostile_ids {
+            if !contacted_hostiles.contains(id) {
+                if let Some(e) = self.entities.get_mut(id) {
+                    e.contact_damage_accum = 0.0;
+                }
             }
         }
 
@@ -1314,6 +1386,183 @@ mod tests {
             }
         }
         assert!(killed, "player shot should have killed the enemy");
+        assert_eq!(world.score(pid), 1);
+    }
+
+    #[test]
+    fn player_contact_does_not_instakill_on_first_overlap() {
+        // Park an enemy directly on top of the player and tick a single
+        // frame. The pre-refactor behavior was an instant double kill;
+        // continuous contact damage must leave the pilot alive after one
+        // tick (dose ≈ 0.055 HP).
+        let mut world = World::new(WorldConfig::default());
+        world.entities.retain(|_, e| !matches!(e.kind, EntityKind::Enemy | EntityKind::Tank));
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        let player_pos = world.player_entity(pid).unwrap().pos;
+        let enemy_id = world.alloc_id();
+        let mut enemy = Entity::enemy(enemy_id, player_pos);
+        // Stop the enemy from drifting off (or shooting) during the tick.
+        enemy.vel = Vec2::ZERO;
+        enemy.shot_cooldown = 100.0;
+        world.entities.insert(enemy_id, enemy);
+
+        let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        assert!(
+            world.player_entity(pid).is_some(),
+            "single tick of overlap should not kill the player"
+        );
+        assert!(
+            !evs.iter().any(|e| matches!(e, GameEvent::PlayerKilled { .. })),
+            "no PlayerKilled event should fire on first overlap tick"
+        );
+        assert_eq!(
+            world.player_entity(pid).unwrap().hp,
+            crate::player::PLAYER_MAX_HP,
+            "full HP should be preserved across a single sub-1.0 damage tick"
+        );
+    }
+
+    #[test]
+    fn player_contact_kills_after_ram_death_seconds() {
+        // A high-HP hostile that doesn't die from contact damage is the
+        // worst-case scenario: the player has to fly away or die. Tick
+        // for `RAM_DEATH_SECONDS` worth of frames and confirm the kill
+        // event fires with DeathCause::Enemy.
+        let mut world = World::new(WorldConfig::default());
+        world.entities.retain(|_, e| !matches!(e.kind, EntityKind::Enemy | EntityKind::Tank));
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        let player_eid = *world.players.get(&pid).unwrap();
+        let player_pos = world.entities.get(&player_eid).unwrap().pos;
+
+        // Indestructible-for-this-test bumper: stash a huge HP pool on the
+        // enemy so its accumulator never crosses a whole HP first.
+        let bumper_id = world.alloc_id();
+        let mut bumper = Entity::enemy(bumper_id, player_pos);
+        bumper.hp = i16::MAX;
+        bumper.max_hp = i16::MAX;
+        bumper.vel = Vec2::ZERO;
+        bumper.shot_cooldown = 100.0;
+        world.entities.insert(bumper_id, bumper);
+
+        // Each tick we re-pin the bumper on top of the player so they
+        // stay overlapping even though the player drifts under gravity.
+        let max_ticks = ((crate::player::RAM_DEATH_SECONDS / crate::TICK_DT).ceil() as i32) + 2;
+        let mut death_cause: Option<crate::DeathCause> = None;
+        for _ in 0..max_ticks {
+            let p_pos = match world.entities.get(&player_eid) {
+                Some(p) if p.alive => p.pos,
+                _ => break,
+            };
+            if let Some(b) = world.entities.get_mut(&bumper_id) {
+                b.pos = p_pos;
+            }
+            let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+            if let Some(cause) = evs.iter().find_map(|e| match e {
+                GameEvent::PlayerKilled { player_id, cause, .. } if *player_id == pid => {
+                    Some(*cause)
+                }
+                _ => None,
+            }) {
+                death_cause = Some(cause);
+                break;
+            }
+        }
+        assert_eq!(
+            death_cause,
+            Some(crate::DeathCause::Enemy),
+            "sustained overlap should kill the player with DeathCause::Enemy"
+        );
+        assert!(world.player_entity(pid).is_none(), "player entity should be gone");
+    }
+
+    #[test]
+    fn brief_contact_does_not_compound_after_separation() {
+        // Touch for ~0.8s, fly away for half a second, touch again. Total
+        // overlap is under RAM_DEATH_SECONDS, so the accumulator must
+        // reset between touches and the player must still be alive.
+        let mut world = World::new(WorldConfig::default());
+        world.entities.retain(|_, e| !matches!(e.kind, EntityKind::Enemy | EntityKind::Tank));
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        let player_eid = *world.players.get(&pid).unwrap();
+        // Pin the pilot up in clear air so 2 s of unpowered drift can't
+        // dunk them into the ground — we only want contact damage to be
+        // a kill vector for this test.
+        let pin_pos = Vec2::new(WORLD_WIDTH * 0.5, WORLD_HEIGHT - 80.0);
+        if let Some(p) = world.entities.get_mut(&player_eid) {
+            p.pos = pin_pos;
+            p.vel = Vec2::ZERO;
+        }
+        let bumper_id = world.alloc_id();
+        let mut bumper = Entity::enemy(bumper_id, pin_pos);
+        bumper.hp = i16::MAX;
+        bumper.max_hp = i16::MAX;
+        bumper.vel = Vec2::ZERO;
+        bumper.shot_cooldown = 100.0;
+        world.entities.insert(bumper_id, bumper);
+
+        let press = |world: &mut World, ticks: i32, overlap: bool| {
+            for _ in 0..ticks {
+                if let Some(p) = world.entities.get_mut(&player_eid) {
+                    if !p.alive {
+                        return;
+                    }
+                    p.pos = pin_pos;
+                    p.vel = Vec2::ZERO;
+                }
+                let target = if overlap { pin_pos } else { pin_pos + Vec2::new(400.0, 0.0) };
+                if let Some(b) = world.entities.get_mut(&bumper_id) {
+                    b.pos = target;
+                }
+                world.tick(&PlayerInputs::new(), crate::TICK_DT);
+            }
+        };
+
+        // ~0.8s of overlap (under the 1.5s lethal threshold).
+        press(&mut world, 48, true);
+        assert!(world.player_entity(pid).is_some(), "should still be alive after 0.8s");
+        // Half a second clear so the accumulator resets and the regen
+        // clock isn't being held at zero.
+        press(&mut world, 30, false);
+        // Another 0.8s of contact. With the accumulator reset, total
+        // continuous overlap is below the death threshold.
+        press(&mut world, 48, true);
+        assert!(
+            world.player_entity(pid).is_some(),
+            "two short overlaps separated by a gap must not compound to a kill"
+        );
+    }
+
+    #[test]
+    fn contact_kills_enemy_and_credits_player_score() {
+        // A bog-standard 1 HP enemy parked on the player should die from
+        // contact damage within a few ticks, and the player should bank
+        // the score even though no shot was fired.
+        let mut world = World::new(WorldConfig::default());
+        world.entities.retain(|_, e| !matches!(e.kind, EntityKind::Enemy | EntityKind::Tank));
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        let player_pos = world.player_entity(pid).unwrap().pos;
+        let enemy_id = world.alloc_id();
+        let mut enemy = Entity::enemy(enemy_id, player_pos);
+        enemy.vel = Vec2::ZERO;
+        enemy.shot_cooldown = 100.0;
+        world.entities.insert(enemy_id, enemy);
+
+        let mut killed = false;
+        for _ in 0..60 {
+            let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+            if evs
+                .iter()
+                .any(|e| matches!(e, GameEvent::EnemyKilled { killer: Some(k), .. } if *k == pid))
+            {
+                killed = true;
+                break;
+            }
+        }
+        assert!(killed, "contact should kill a 1-HP enemy within a second");
         assert_eq!(world.score(pid), 1);
     }
 

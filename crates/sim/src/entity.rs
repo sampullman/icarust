@@ -86,6 +86,12 @@ pub struct Entity {
     /// Seconds since the player last took damage. Players regen HP after a
     /// grace period of `player::PLAYER_REGEN_DELAY` seconds.
     pub damage_timer: f32,
+    /// Fractional HP carried over from contact damage between players and
+    /// hostiles. Tick accumulates `RAM_DAMAGE_PER_SECOND * dt`; when it
+    /// crosses `1.0` we deduct whole HP. Reset to zero whenever the
+    /// entity isn't touching an opposing entity that tick, so two short
+    /// brushes don't compound into a kill.
+    pub contact_damage_accum: f32,
     /// True if the player is firing thrust this tick. Surfaces to the
     /// client so it can draw a flame/exhaust trail.
     pub thrusting: bool,
@@ -125,6 +131,7 @@ impl Entity {
             // Start "fully healed" — large value, regen logic is dormant
             // until the first hit lands.
             damage_timer: f32::MAX / 2.0,
+            contact_damage_accum: 0.0,
             thrusting: false,
             accel: Vec2::ZERO,
             source: None,
@@ -147,6 +154,7 @@ impl Entity {
             hp: 0,
             max_hp: 0,
             damage_timer: 0.0,
+            contact_damage_accum: 0.0,
             thrusting: false,
             accel: Vec2::ZERO,
             source: None,
@@ -194,6 +202,7 @@ impl Entity {
             hp: crate::enemy::ENEMY_HP,
             max_hp: crate::enemy::ENEMY_HP,
             damage_timer: 0.0,
+            contact_damage_accum: 0.0,
             thrusting: false,
             accel: Vec2::ZERO,
             source: None,
@@ -219,6 +228,7 @@ impl Entity {
             hp: crate::tank::TANK_HP,
             max_hp: crate::tank::TANK_HP,
             damage_timer: 0.0,
+            contact_damage_accum: 0.0,
             thrusting: false,
             accel: Vec2::ZERO,
             source: None,

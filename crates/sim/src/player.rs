@@ -21,6 +21,17 @@ pub const PLAYER_REGEN_DELAY: f32 = 3.0;
 /// Seconds between each +1 HP tick once regen kicks in.
 pub const PLAYER_REGEN_INTERVAL: f32 = 1.5;
 
+/// Seconds a full-HP pilot can stay overlapping a hostile chassis before
+/// they're destroyed. The contact damage rate is derived from this so the
+/// design knob is "how long can I touch a tank before I die", not a raw
+/// DPS number.
+pub const RAM_DEATH_SECONDS: f32 = 1.5;
+/// HP/s drained while a player and a hostile occupy the same space. Same
+/// rate flows back into the hostile, so a brief brush kills weak enemies
+/// (1 HP) almost instantly while the player only loses a chip; tougher
+/// hostiles take proportionally longer to chew through.
+pub const RAM_DAMAGE_PER_SECOND: f32 = PLAYER_MAX_HP as f32 / RAM_DEATH_SECONDS;
+
 /// Pure rotation + thrust step. Returns `(new_velocity, new_facing)`.
 pub fn apply_input(velocity: Vec2, facing: f32, input: &PlayerInput, dt: f32) -> (Vec2, f32) {
     let new_facing = facing + dt * PLAYER_TURN_RATE * input.xaxis;
