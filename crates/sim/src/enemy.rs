@@ -12,9 +12,10 @@ use std::f32::consts::{PI, TAU};
 use crate::util::{self, Vec2};
 
 pub const ENEMY_BBOX: f32 = 14.0;
-/// Ship enemies die in one shot — `hp == max_hp == 1`. Kept as a named
-/// constant so it's symmetric with `tank::TANK_HP` in damage handling.
-pub const ENEMY_HP: i16 = 1;
+/// Ship enemies take two hits to bring down. Kept as a named constant
+/// so the damage path in `world::tick` (which works for any HP > 0) and
+/// the client smoke trail both key off the same value.
+pub const ENEMY_HP: i16 = 2;
 /// Acceleration applied when thrusting toward the target (units/s²).
 pub const ENEMY_THRUST: f32 = 180.0;
 pub const ENEMY_MAX_SPEED: f32 = 130.0;
@@ -30,7 +31,7 @@ pub const ENEMY_FIRE_CONE: f32 = 0.25;
 /// Max distance at which the enemy will attempt to fire.
 pub const ENEMY_FIRE_RANGE: f32 = 360.0;
 /// Seconds between enemy shots.
-pub const ENEMY_SHOT_TIME: f32 = 0.9;
+pub const ENEMY_SHOT_TIME: f32 = 1.2;
 pub const ENEMY_SHOT_SPEED: f32 = 260.0;
 
 /// One AI step result.

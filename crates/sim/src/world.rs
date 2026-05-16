@@ -1464,6 +1464,62 @@ mod tests {
     }
 
     #[test]
+    fn player_takes_two_shots_to_kill_enemy_ship() {
+        // Inject two player-owned shots, tick once each. The first must
+        // emit `EnemyDamaged` and leave the enemy alive; the second must
+        // emit `EnemyKilled`. Locks in `ENEMY_HP = 2` and asserts the
+        // shared damage path treats ships and tanks symmetrically.
+        let mut world = World::new(WorldConfig::default());
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        world
+            .entities
+            .retain(|_, e| !matches!(e.kind, EntityKind::Enemy | EntityKind::Tank));
+        let enemy_pos = Vec2::new(WORLD_WIDTH * 0.5 + 100.0, SPAWN_Y);
+        let enemy_id = world.alloc_id();
+        let mut enemy = Entity::enemy(enemy_id, enemy_pos);
+        enemy.vel = Vec2::ZERO;
+        enemy.shot_cooldown = 100.0;
+        world.entities.insert(enemy_id, enemy);
+
+        let inject_shot = |world: &mut World| {
+            let shot_id = world.alloc_id();
+            let shot = Entity::shot(
+                shot_id,
+                ShotOwner::Player(pid),
+                enemy_pos,
+                Vec2::ZERO,
+                0.0,
+            );
+            world.entities.insert(shot_id, shot);
+        };
+
+        inject_shot(&mut world);
+        let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        assert!(
+            evs.iter().any(|e| matches!(e, GameEvent::EnemyDamaged { .. })),
+            "first hit should emit EnemyDamaged"
+        );
+        assert!(
+            !evs.iter().any(|e| matches!(e, GameEvent::EnemyKilled { .. })),
+            "first hit should not kill the enemy"
+        );
+        assert_eq!(
+            world.entities.get(&enemy_id).map(|e| e.hp),
+            Some(crate::enemy::ENEMY_HP - 1),
+        );
+
+        inject_shot(&mut world);
+        let evs = world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, GameEvent::EnemyKilled { killer: Some(k), .. } if *k == pid)),
+            "second hit should kill the enemy and credit the player"
+        );
+        assert!(world.entities.get(&enemy_id).is_none());
+    }
+
+    #[test]
     fn player_contact_does_not_instakill_on_first_overlap() {
         // Park an enemy directly on top of the player and tick a single
         // frame. The pre-refactor behavior was an instant double kill;

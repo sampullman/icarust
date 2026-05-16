@@ -830,6 +830,13 @@ impl EventHandler for MainState {
                         self.smoke
                             .note_health(e.id, smoke_pos, e.hp, e.max_hp, 0.55, dt);
                     }
+                    EntityKind::Enemy => {
+                        // Enemies never heal, so a steady trail reads as
+                        // a wounded plane heading for a crash. Less dense
+                        // than the player's because the dot is smaller and
+                        // we don't want a sky full of brown clouds.
+                        self.smoke.note_health(e.id, pos, e.hp, e.max_hp, 0.7, dt);
+                    }
                     _ => {}
                 }
             }

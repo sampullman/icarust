@@ -36,6 +36,20 @@ const TUFT_SPACING: f32 = 32.0;
 /// Seeds the tuft placement RNG. XOR'd with the world's first surface
 /// height so two different terrains don't produce identical tufting.
 const TUFT_SEED_BASE: u64 = 0xA17E_C0FF_EE3A_DA15;
+/// Seeds the dirt-patch placement RNG. Distinct from the tuft seed so
+/// the two passes can be tuned independently without one accidentally
+/// reflowing the other.
+const PATCH_SEED_BASE: u64 = 0xD12D_B0DD_B17A_F00D;
+/// Approximate spacing (world units) between dirt patches. Smaller than
+/// `TUFT_SPACING` so the patches cover the soil more densely — they're
+/// the main thing keeping the ground from looking like a flat brown
+/// stripe.
+const PATCH_SPACING: f32 = 14.0;
+/// How far below the surface a patch may sit. Patches sample a depth in
+/// `[0, PATCH_MAX_DEPTH]`, with most weight near the top so the visible
+/// "skin" of the soil is the part that looks textured. Anything deeper
+/// would be hidden by the camera most of the time.
+const PATCH_MAX_DEPTH: f32 = 36.0;
 /// How far below world Y=0 the soil polygon's bottom edge sits. We
 /// over-extend so the camera diving into a valley never sees the
 /// mesh's open bottom. Stored in screen-down (Y-flipped) coords, so
@@ -65,6 +79,19 @@ const GRASS_COLOR: Color = Color::new(0.46, 0.52, 0.26, 1.0);
 /// Tint of dirt pebbles — a step darker than the soil fill so they
 /// pop against it.
 const PEBBLE_COLOR: Color = Color::new(0.42, 0.30, 0.20, 1.0);
+
+/// Palette used by the dirt-patch decoration pass. Each entry is a
+/// small (rgb) offset added to the soil fill — keeping the patches in
+/// the same dusty family while still reading as separate clods. The
+/// first entry is "darker than soil" (most common); the others are a
+/// touch redder or lighter to break up regularity. Alpha is baked into
+/// the mesh, so the values double as draw-time tints.
+const DIRT_PATCH_DELTAS: &[(f32, f32, f32)] = &[
+    (-0.10, -0.10, -0.08),
+    (-0.06, -0.04, -0.02),
+    (0.05, 0.03, 0.0),
+    (-0.14, -0.16, -0.14),
+];
 
 /// Two flavors of tuft. Sampled with weighted random choice at build
 /// time so the surface gets a mix.
@@ -178,6 +205,14 @@ fn append_terrain_band(mb: &mut MeshBuilder, band: &TerrainBand) -> GameResult<(
     match band.kind {
         TerrainKind::Ground => {
             append_ground_polygon(mb, &band.profile, band.kind)?;
+            // Dirt patches go *before* the horizon stripe and tufts so
+            // the surface line + grass cover any patch that pokes up
+            // through the very top of the soil — keeps the silhouette
+            // crisp while still letting some patches kiss the surface.
+            let patches = build_dirt_patches(&band.profile, fill_color_for(band.kind));
+            for patch in &patches {
+                append_dirt_patch(mb, patch)?;
+            }
             append_horizon_stripe(mb, &band.profile, band.kind)?;
             let tufts = build_tufts(&band.profile);
             for tuft in &tufts {
@@ -355,6 +390,97 @@ fn append_tuft(mb: &mut MeshBuilder, tuft: &Tuft) -> GameResult<()> {
         }
         mb.polygon(DrawMode::fill(), &transformed, color)?;
     }
+    Ok(())
+}
+
+/// One dirt patch — a small, randomly-shaped polygon sitting in or just
+/// below the soil surface. Built once at mesh-bake time; the resulting
+/// polygon has vertex colors baked in so the draw call uses a plain
+/// white tint like everything else in the batched mesh.
+#[derive(Debug, Clone)]
+struct DirtPatch {
+    /// World position of the patch center. Y-up.
+    center: Vec2,
+    /// Local-space polygon vertices around the origin (already scaled
+    /// and rotated). Rendered as a single concave-allowed polygon.
+    points: Vec<Vec2>,
+    color: Color,
+}
+
+/// Scatter dirt patches across `profile`. Each patch picks a tint from
+/// `DIRT_PATCH_DELTAS` relative to `soil`, a random depth below the
+/// surface, and an irregular 6-sided silhouette. Deterministic in the
+/// profile's heightmap so two clients render identical terrain.
+fn build_dirt_patches(profile: &GroundProfile, soil: Color) -> Vec<DirtPatch> {
+    let seed = PATCH_SEED_BASE
+        ^ profile.heights.first().copied().unwrap_or(0.0).to_bits() as u64
+        ^ (profile.heights.len() as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
+    let w = profile.world_width;
+    if w <= 0.0 {
+        return Vec::new();
+    }
+    let approx_count = (w / PATCH_SPACING).round() as usize;
+    let mut patches = Vec::with_capacity(approx_count);
+    let mut x = 0.0_f32;
+    while x < w {
+        let jitter: f32 = (rng.gen::<f32>() - 0.5) * PATCH_SPACING * 0.9;
+        let here = (x + jitter).clamp(0.0, w - 0.5);
+        // Bias depth toward the top of the soil so most patches read on
+        // the visible "skin." `t^2` skews the uniform random toward 0
+        // (near-surface) while still allowing the occasional deeper clod.
+        let t: f32 = rng.gen();
+        let depth = t * t * PATCH_MAX_DEPTH;
+        let surface_y = profile.height_at(here);
+        let center = Vec2::new(here, surface_y - depth);
+
+        let delta = DIRT_PATCH_DELTAS[rng.gen_range(0..DIRT_PATCH_DELTAS.len())];
+        let color = Color::new(
+            (soil.r + delta.0).clamp(0.0, 1.0),
+            (soil.g + delta.1).clamp(0.0, 1.0),
+            (soil.b + delta.2).clamp(0.0, 1.0),
+            1.0,
+        );
+
+        let radius = 2.4 + rng.gen::<f32>() * 3.2;
+        let rotation = rng.gen::<f32>() * std::f32::consts::TAU;
+        let points = build_patch_polygon(&mut rng, radius, rotation);
+
+        patches.push(DirtPatch { center, points, color });
+        x += PATCH_SPACING;
+    }
+    patches
+}
+
+/// Produce an irregular 6-vertex blob around the origin with the given
+/// average `radius` and base `rotation`. Per-vertex radius jitter keeps
+/// the silhouette from looking like a stamped circle.
+fn build_patch_polygon(rng: &mut ChaCha8Rng, radius: f32, rotation: f32) -> Vec<Vec2> {
+    const SIDES: usize = 6;
+    let mut out = Vec::with_capacity(SIDES);
+    let step = std::f32::consts::TAU / SIDES as f32;
+    for i in 0..SIDES {
+        let angle = rotation + step * i as f32;
+        let r = radius * (0.65 + rng.gen::<f32>() * 0.55);
+        // World is Y-up but the soil polygon was authored Y-down (see
+        // `append_ground_polygon` flipping with `-h`); patches are baked
+        // into the same coordinate space so we flip Y here too.
+        out.push(Vec2::new(angle.cos() * r, -angle.sin() * r));
+    }
+    out
+}
+
+/// Translate `patch` into mesh-space (Y-down) and append as a filled
+/// polygon with the per-patch tint baked into the vertex colors.
+fn append_dirt_patch(mb: &mut MeshBuilder, patch: &DirtPatch) -> GameResult<()> {
+    let anchor = Vec2::new(patch.center.x, -patch.center.y);
+    let transformed: Vec<Vec2> = patch
+        .points
+        .iter()
+        .map(|p| Vec2::new(anchor.x + p.x, anchor.y + p.y))
+        .collect();
+    mb.polygon(DrawMode::fill(), &transformed, patch.color)?;
     Ok(())
 }
 
