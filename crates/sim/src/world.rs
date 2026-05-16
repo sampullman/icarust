@@ -18,6 +18,7 @@ use crate::tank::{
 };
 use crate::terrain::{self, TerrainBand};
 use crate::util::{self, Vec2};
+use crate::wave::{AliveCounts, SpawnRequest, WaveDirector, INITIAL_ENEMY_COUNT};
 
 /// World is wider than the visible viewport so the camera can scroll
 /// instead of wrapping at the screen edge. The X axis is still toroidal
@@ -38,26 +39,16 @@ pub const VIEW_HEIGHT: f32 = 540.0;
 /// ~`VIEW_HEIGHT` of vertical headroom to climb into.
 pub const WORLD_HEIGHT: f32 = VIEW_HEIGHT * 2.0;
 
-/// Default spawn altitude. Sits roughly in the middle of the base viewport
-/// so a fresh pilot sees the ground at the bottom of their screen instead
-/// of being dropped far above it. Used by `add_player` / `respawn_player`.
-pub const SPAWN_Y: f32 = VIEW_HEIGHT * 0.5;
+/// Default spawn altitude. Sits well above the visible viewport floor
+/// so a fresh pilot has plenty of vertical headroom before gravity (or
+/// a tank shell) becomes a problem. Used by `add_player` /
+/// `respawn_player`. Paired with `Entity::gravity_armed`, which keeps
+/// the ship motionless until the player thrusts for the first time —
+/// so the spawn position is also where the pilot waits.
+pub const SPAWN_Y: f32 = VIEW_HEIGHT * 1.2;
 
 pub const SHOT_BBOX: f32 = 6.0;
 pub const SHOT_LIFE: f32 = 2.0;
-
-/// Ship enemies present at the start of level 1. Each subsequent level
-/// adds one more, capped at `ENEMIES_MAX`.
-pub const ENEMIES_PER_LEVEL_BASE: i32 = 2;
-/// Cap on simultaneous ship enemies. Without this, late levels turn into
-/// bullet hell that's no longer fun.
-pub const ENEMIES_MAX: i32 = 8;
-
-/// Tanks present at the start of level 1. Tanks scale up at half the
-/// rate of ships so the player isn't drowned in artillery.
-pub const TANKS_PER_LEVEL_BASE: i32 = 1;
-/// Cap on simultaneous tanks.
-pub const TANKS_MAX: i32 = 4;
 
 /// Hostiles refuse to spawn within this radius of any live player so the
 /// pilot never has to deal with one materialising in their lap.
@@ -92,6 +83,7 @@ pub struct World {
     score_by_player: BTreeMap<PlayerId, i32>,
     level: i32,
     terrain: Vec<TerrainBand>,
+    director: WaveDirector,
 }
 
 impl World {
@@ -108,8 +100,9 @@ impl World {
             score_by_player: BTreeMap::new(),
             level: 1,
             terrain,
+            director: WaveDirector::new(),
         };
-        world.spawn_level_hostiles();
+        world.spawn_initial_wave();
         world
     }
 
@@ -176,9 +169,9 @@ impl World {
 
     /// Put a dead player back in the world and reset the hostile state so
     /// they aren't dropped into mid-battle. Wipes existing enemies, tanks,
-    /// and shots, drops the level back to 1, and spawns a fresh wave at
-    /// safe distance. Other live players stay put — their entities and
-    /// scores are preserved.
+    /// and shots, drops the level back to 1, resets the spawn director, and
+    /// spawns a fresh starting wave at safe distance. Other live players
+    /// stay put — their entities and scores are preserved.
     pub fn respawn_player(&mut self, player_id: PlayerId) -> Option<EntityId> {
         if self.players.contains_key(&player_id) {
             return None;
@@ -186,8 +179,9 @@ impl World {
         self.entities
             .retain(|_, e| matches!(e.kind, EntityKind::Player { .. }));
         self.level = 1;
+        self.director.reset();
         let id = self.add_player(player_id);
-        self.spawn_level_hostiles();
+        self.spawn_initial_wave();
         id
     }
 
@@ -247,6 +241,11 @@ impl World {
             entity.vel = vel;
             entity.facing = facing;
             entity.thrusting = input.yaxis > 0.0;
+            // First thrust input arms gravity for the rest of this life.
+            // Stays on through respawn; `Entity::player` resets it to false.
+            if input.yaxis > 0.0 {
+                entity.gravity_armed = true;
+            }
 
             entity.shot_cooldown -= dt;
 
@@ -405,9 +404,9 @@ impl World {
             match entity.kind {
                 EntityKind::Player { .. } => {
                     util::clamp_y(&mut entity.pos, &mut entity.vel, world_size.y);
-                    entity.vel = player::apply_forces(entity.vel, dt);
+                    entity.vel = player::apply_forces(entity.vel, dt, entity.gravity_armed);
                 }
-                EntityKind::Shot { .. } => {
+                EntityKind::Shot { owner } => {
                     let surface = terrain::surface_y_at(entity.pos.x, &self.terrain);
                     let floor = surface + entity.bbox;
                     if entity.detonates_on_terrain && entity.pos.y <= floor {
@@ -420,6 +419,14 @@ impl World {
                         let impact = Vec2::new(entity.pos.x, surface);
                         entity.alive = false;
                         detonations.push(impact);
+                        continue;
+                    }
+                    // Player bullets are absorbed by terrain instead of
+                    // ricocheting; otherwise downward shots arc back at
+                    // the pilot. Enemy bullets keep the bouncing behavior
+                    // so they still skim along the hills.
+                    if matches!(owner, ShotOwner::Player(_)) && entity.pos.y <= floor {
+                        entity.alive = false;
                         continue;
                     }
                     // Standard bullet: bounce off the local top-of-terrain
@@ -493,19 +500,24 @@ impl World {
             self.players.remove(&pid);
         }
 
-        // 5. Level progression. Once a player has cleared every hostile
-        // (ships and tanks) the level goes up and a new (larger) wave
-        // spawns. Skip while no players are around — without someone to
-        // chase the wave would just hang in air.
-        let any_hostiles = self
-            .entities
-            .values()
-            .any(|e| matches!(e.kind, EntityKind::Enemy | EntityKind::Tank));
-        let any_players = !self.players.is_empty();
-        if !any_hostiles && any_players {
-            self.level += 1;
-            self.spawn_level_hostiles();
-            events.push(GameEvent::LevelUp(self.level));
+        // 5. Wave director. Levels run on a wall-clock timer (see
+        // `wave::level_duration`) and the director also decides when to
+        // push fresh hostiles into the world. We only tick it while
+        // someone is alive to fight — an empty world freezes the level
+        // counter and the spawn timers so nothing is wasted.
+        if !self.players.is_empty() {
+            let alive = self.alive_hostile_counts();
+            let step = self.director.step(self.level, dt, alive);
+            if let Some(new_level) = step.level_up {
+                self.level = new_level;
+                events.push(GameEvent::LevelUp(self.level));
+            }
+            for req in step.spawns {
+                match req {
+                    SpawnRequest::Enemy => self.spawn_enemy(),
+                    SpawnRequest::Tank => self.spawn_tank(),
+                }
+            }
         }
 
         self.tick = self.tick.next();
@@ -875,28 +887,10 @@ impl World {
         }
     }
 
-    /// Number of ship enemies that should be airborne at the current level.
-    /// We scale with the level so each clear ramps up the pressure, capped
-    /// at `ENEMIES_MAX` so things stay readable.
-    fn target_enemy_count(&self) -> i32 {
-        (ENEMIES_PER_LEVEL_BASE + self.level - 1).clamp(1, ENEMIES_MAX)
-    }
-
-    /// Number of tanks that should be rolling at the current level. Half
-    /// the pace of ship enemies — tanks are heavier threats so we add
-    /// them more slowly.
-    fn target_tank_count(&self) -> i32 {
-        (TANKS_PER_LEVEL_BASE + (self.level - 1) / 2).clamp(0, TANKS_MAX)
-    }
-
-    /// Spawn hostiles to bring ship + tank counts up to the current
-    /// level's targets. New hostile kinds should plug in here alongside
-    /// the existing two; the level-up trigger checks "no hostiles" so
-    /// each kind contributes to clearing.
-    fn spawn_level_hostiles(&mut self) {
-        let enemy_target = self.target_enemy_count();
-        let tank_target = self.target_tank_count();
-        let (enemy_current, tank_current) = self.entities.values().fold((0, 0), |(e, t), entity| {
+    /// Tally alive ship/tank counts in a single pass. Cheap and the
+    /// allocation-free shape is convenient for the wave director.
+    fn alive_hostile_counts(&self) -> AliveCounts {
+        let (enemies, tanks) = self.entities.values().fold((0, 0), |(e, t), entity| {
             if !entity.alive {
                 return (e, t);
             }
@@ -906,11 +900,15 @@ impl World {
                 _ => (e, t),
             }
         });
-        for _ in enemy_current..enemy_target {
+        AliveCounts { enemies, tanks }
+    }
+
+    /// Seed the world with the starting wave. Ships only — tanks unlock
+    /// later through the wave director. Called from `new` and again from
+    /// `respawn_player` after the world is wiped clean.
+    fn spawn_initial_wave(&mut self) {
+        for _ in 0..INITIAL_ENEMY_COUNT {
             self.spawn_enemy();
-        }
-        for _ in tank_current..tank_target {
-            self.spawn_tank();
         }
     }
 
@@ -1048,29 +1046,105 @@ mod tests {
             .entities()
             .filter(|e| matches!(e.kind, EntityKind::Enemy))
             .collect();
-        assert_eq!(enemies.len(), ENEMIES_PER_LEVEL_BASE as usize);
+        assert_eq!(enemies.len(), crate::wave::INITIAL_ENEMY_COUNT as usize);
     }
 
     #[test]
-    fn world_spawns_initial_tank_wave() {
+    fn world_has_no_tanks_at_level_one_start() {
+        // Tanks unlock at `TANK_START_LEVEL`; a fresh world is at level 1
+        // so the initial wave must contain ship enemies only.
         let world = World::new(WorldConfig::default());
         let tanks: Vec<_> = world
             .entities()
             .filter(|e| matches!(e.kind, EntityKind::Tank))
             .collect();
-        assert_eq!(tanks.len(), TANKS_PER_LEVEL_BASE as usize);
-        for t in &tanks {
-            // Tanks sit at the local surface height + the chassis offset;
-            // with hilly terrain that's an X-dependent value.
-            let ground = terrain::ground_surface_at(t.pos.x, world.terrain());
-            assert!(
-                (t.pos.y - (ground + crate::tank::TANK_GROUND_OFFSET)).abs() < 1e-3,
-                "tank should sit on the ground surface, got y={}",
-                t.pos.y
-            );
-            assert_eq!(t.hp, crate::tank::TANK_HP);
-            assert_eq!(t.max_hp, crate::tank::TANK_HP);
+        assert!(tanks.is_empty(), "no tanks should be present at level 1 start");
+    }
+
+    /// Pin the player at high altitude with zero velocity, and clear any
+    /// hostiles so they can't intervene. Used by long-running tests below
+    /// that need the world to stay quiet while the wave director runs.
+    fn pin_player_aloft(world: &mut World, pid: PlayerId) {
+        let eid = *world.players.get(&pid).unwrap();
+        if let Some(p) = world.entities.get_mut(&eid) {
+            p.pos = Vec2::new(WORLD_WIDTH * 0.5, WORLD_HEIGHT - 80.0);
+            p.vel = Vec2::ZERO;
         }
+    }
+
+    #[test]
+    fn director_spawns_tanks_once_level_reaches_unlock() {
+        // Run with one player and force the level up to the tank unlock.
+        // Within a generous window after the level transition we should
+        // see a tank materialise.
+        let mut world = World::new(WorldConfig::default());
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        world.level = crate::wave::TANK_START_LEVEL;
+        let dt = crate::TICK_DT;
+        let budget = ((crate::wave::tank_spawn_interval(crate::wave::TANK_START_LEVEL)
+            + 2.0)
+            / dt)
+            .ceil() as i32;
+        let mut saw_tank = false;
+        for _ in 0..budget {
+            // Re-pin the player every tick so gravity doesn't crash them
+            // and end the director's tick window. Also wipe any hostiles
+            // that the director itself spawns above the player so we
+            // don't eat damage from them.
+            pin_player_aloft(&mut world, pid);
+            world.entities.retain(|_, e| {
+                !matches!(e.kind, EntityKind::Enemy)
+                    && !matches!(e.kind, EntityKind::Shot { .. })
+            });
+            world.tick(&PlayerInputs::new(), dt);
+            if world
+                .entities()
+                .any(|e| matches!(e.kind, EntityKind::Tank) && e.alive)
+            {
+                saw_tank = true;
+                break;
+            }
+        }
+        assert!(
+            saw_tank,
+            "a tank should spawn within one tank-interval at level {}",
+            crate::wave::TANK_START_LEVEL
+        );
+    }
+
+    #[test]
+    fn level_advances_on_timer_with_player_present() {
+        // Run for one level's worth of ticks (see `wave::level_duration`)
+        // with a player in the world; the level counter must advance
+        // even though no wave has been "cleared".
+        let mut world = World::new(WorldConfig::default());
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        let dt = crate::TICK_DT;
+        let steps = (crate::wave::level_duration(1) / dt).ceil() as i32 + 30;
+        let start_level = world.level();
+        for _ in 0..steps {
+            // Keep the pilot alive and in clear air; the director only
+            // runs while at least one player is alive.
+            if !world.has_player(pid) {
+                world.respawn_player(pid);
+            }
+            pin_player_aloft(&mut world, pid);
+            // Clear hostiles and shots so they can't damage the pinned
+            // player. The director keeps trying to spawn more — that's
+            // fine, we just wipe them again on the next iteration.
+            world.entities.retain(|_, e| {
+                matches!(e.kind, EntityKind::Player { .. })
+            });
+            world.tick(&PlayerInputs::new(), dt);
+        }
+        assert!(
+            world.level() > start_level,
+            "level should advance on the wave-director timer (got {} from {})",
+            world.level(),
+            start_level
+        );
     }
 
     #[test]
@@ -1587,10 +1661,12 @@ mod tests {
         world.add_player(pid);
 
         // Force level + extra enemies into the world by clearing
-        // everything and bumping the counter.
+        // everything, bumping the counter, and triggering a wave.
         world.entities.retain(|_, e| matches!(e.kind, EntityKind::Player { .. }));
         world.level = 5;
-        world.spawn_level_hostiles();
+        for _ in 0..6 {
+            world.spawn_enemy();
+        }
         let before_ids: Vec<EntityId> = world
             .entities_map()
             .iter()
@@ -1680,15 +1756,16 @@ mod tests {
     }
 
     #[test]
-    fn shot_bounces_off_terrain_surface() {
-        // Drop a shot moving straight down near the ground. After enough
-        // ticks for it to reach the surface, its velocity should be
-        // positive (bouncing upward) and its position should sit above
-        // the terrain surface plus its bbox.
+    fn enemy_shot_bounces_off_terrain_surface() {
+        // Drop an enemy shot moving straight down near the ground. After
+        // enough ticks for it to reach the surface, its velocity should
+        // be positive (bouncing upward) and its position should sit above
+        // the terrain surface plus its bbox. Player shots take a
+        // different path — see `player_shot_is_absorbed_by_terrain`.
         let mut world = World::new(WorldConfig::default());
         // Manually inject a downward shot at a known height; tick.
         let id = world.alloc_id();
-        let owner = ShotOwner::Player(PlayerId(99));
+        let owner = ShotOwner::Enemy;
         let shot_x = WORLD_WIDTH * 0.5;
         let ground_y = terrain::ground_surface_at(shot_x, world.terrain());
         let start = Vec2::new(shot_x, ground_y + 40.0);
@@ -1714,7 +1791,147 @@ mod tests {
                 }
             }
         }
-        panic!("shot never bounced off terrain");
+        panic!("enemy shot never bounced off terrain");
+    }
+
+    #[test]
+    fn player_shot_is_absorbed_by_terrain() {
+        // A player-owned shot fired into the ground should disappear
+        // instead of ricocheting back. We aim a downward shot at the
+        // surface and confirm the entity is gone within a handful of
+        // ticks, with no upward reflection in between.
+        let mut world = World::new(WorldConfig::default());
+        let id = world.alloc_id();
+        let owner = ShotOwner::Player(PlayerId(99));
+        let shot_x = WORLD_WIDTH * 0.5;
+        let ground_y = terrain::ground_surface_at(shot_x, world.terrain());
+        let start = Vec2::new(shot_x, ground_y + 40.0);
+        let vel = Vec2::new(0.0, -400.0);
+        world.entities.insert(
+            id,
+            Entity::shot(id, owner, start, vel, std::f32::consts::PI),
+        );
+        let mut max_vy = f32::MIN;
+        for _ in 0..30 {
+            world.tick(&PlayerInputs::new(), crate::TICK_DT);
+            if let Some(s) = world.entities.get(&id) {
+                max_vy = max_vy.max(s.vel.y);
+            } else {
+                // Absorbed — done. Sanity-check it never bounced first.
+                assert!(
+                    max_vy <= 0.0 + 1e-3,
+                    "player shot should never reflect upward, peak vy={max_vy}"
+                );
+                return;
+            }
+        }
+        panic!("player shot should have been absorbed by terrain");
+    }
+
+    #[test]
+    fn player_shot_outlives_enemy_shot_in_air() {
+        // Same arena, two shots fired horizontally well above the ground
+        // so neither one runs into terrain. Tick long enough for the
+        // shorter TTL (enemy) to expire; the player's shot should still
+        // be alive because `PLAYER_SHOT_LIFE > world::SHOT_LIFE`.
+        let mut world = World::new(WorldConfig::default());
+        world.entities.clear();
+        let high_y = WORLD_HEIGHT - 60.0;
+        let pos = Vec2::new(WORLD_WIDTH * 0.5, high_y);
+        // Slow horizontal velocity so neither shot exits the world before
+        // TTL expiry.
+        let vel = Vec2::new(50.0, 0.0);
+        let player_id = world.alloc_id();
+        world.entities.insert(
+            player_id,
+            Entity::shot(player_id, ShotOwner::Player(PlayerId(0)), pos, vel, 0.0),
+        );
+        let enemy_id = world.alloc_id();
+        world.entities.insert(
+            enemy_id,
+            Entity::shot(enemy_id, ShotOwner::Enemy, pos, vel, 0.0),
+        );
+
+        // Tick just past the enemy bullet's TTL but well before the
+        // player's so the difference is observable.
+        let between =
+            (crate::world::SHOT_LIFE + crate::player::PLAYER_SHOT_LIFE) * 0.5;
+        let steps = (between / crate::TICK_DT).ceil() as i32;
+        for _ in 0..steps {
+            world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        }
+        assert!(
+            world.entities.get(&enemy_id).is_none(),
+            "enemy bullet should have expired by mid-window"
+        );
+        assert!(
+            world.entities.get(&player_id).is_some(),
+            "player bullet should still be alive past the enemy bullet's TTL"
+        );
+    }
+
+    #[test]
+    fn fresh_pilot_does_not_drift_until_thrust() {
+        // Spawn a pilot, run for half a second with no input — they must
+        // sit perfectly still. Then thrust for one tick; gravity arms
+        // and the ship starts falling (assuming the thrust pulse is
+        // released).
+        let mut world = World::new(WorldConfig::default());
+        world.entities.retain(|_, e| !matches!(e.kind, EntityKind::Enemy | EntityKind::Tank));
+        let pid = PlayerId(0);
+        world.add_player(pid);
+        let eid = *world.players.get(&pid).unwrap();
+        let spawn_pos = world.entities.get(&eid).unwrap().pos;
+
+        // 30 ticks (~0.5s) with no input.
+        for _ in 0..30 {
+            world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        }
+        let p = world.entities.get(&eid).unwrap();
+        assert_eq!(p.pos, spawn_pos, "unarmed pilot should not drift");
+        assert_eq!(p.vel, Vec2::ZERO);
+        assert!(!p.gravity_armed);
+
+        // One thrust pulse arms gravity, then release.
+        let mut inputs = PlayerInputs::new();
+        inputs.insert(
+            pid,
+            PlayerInput { xaxis: 0.0, yaxis: 1.0, fire: false },
+        );
+        world.tick(&inputs, crate::TICK_DT);
+        let p_after = world.entities.get(&eid).unwrap();
+        assert!(p_after.gravity_armed, "first thrust should arm gravity");
+
+        // Stop thrusting; over the next 30 ticks the pilot must fall.
+        for _ in 0..30 {
+            world.tick(&PlayerInputs::new(), crate::TICK_DT);
+        }
+        let p_falling = world.entities.get(&eid).unwrap();
+        assert!(
+            p_falling.vel.y < 0.0,
+            "armed pilot should accumulate downward velocity, got {:?}",
+            p_falling.vel,
+        );
+    }
+
+    #[test]
+    fn spawn_sits_well_above_ground() {
+        // The player spawn should clear the terrain by a healthy margin
+        // so a startled pilot doesn't crash before they thrust. Concretely:
+        // distance from spawn Y to the local ground surface should exceed
+        // the entire viewport height, so even a free-fall would take many
+        // seconds to terminate.
+        let world = World::new(WorldConfig::default());
+        let pid = PlayerId(0);
+        // World::new doesn't pre-populate players, so we just inspect the
+        // SPAWN_Y constant in isolation.
+        let _ = pid;
+        let ground = terrain::ground_surface_at(WORLD_WIDTH * 0.5, world.terrain());
+        let headroom = SPAWN_Y - ground;
+        assert!(
+            headroom > VIEW_HEIGHT,
+            "spawn should clear ground by more than one viewport, got {headroom}",
+        );
     }
 
     #[test]
@@ -1730,10 +1947,16 @@ mod tests {
             });
             let pid = PlayerId(0);
             world.add_player(pid);
-            // Clear and trigger fresh spawns several times.
+            // Clear and trigger fresh spawns several times. We force a
+            // mixed ship+tank wave so both kinds are exercised.
             for _ in 0..4 {
                 world.entities.retain(|_, e| matches!(e.kind, EntityKind::Player { .. }));
-                world.spawn_level_hostiles();
+                for _ in 0..4 {
+                    world.spawn_enemy();
+                }
+                for _ in 0..2 {
+                    world.spawn_tank();
+                }
                 let player_pos = world.player_entity(pid).unwrap().pos;
                 for (_, e) in world.entities_map() {
                     if matches!(e.kind, EntityKind::Enemy | EntityKind::Tank) {

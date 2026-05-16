@@ -12,6 +12,10 @@ pub const PLAYER_TURN_RATE: f32 = 3.0;
 /// Seconds between shots.
 pub const PLAYER_SHOT_TIME: f32 = 0.3;
 pub const SHOT_SPEED: f32 = 340.0;
+/// How long a player bullet lives before fading. Longer than the default
+/// `world::SHOT_LIFE` (which enemy bullets use) so player fire reaches
+/// distant targets even when the pilot has peeled away.
+pub const PLAYER_SHOT_LIFE: f32 = 3.5;
 
 /// Player hit-point ceiling. Enemy bullets chip one HP at a time; rocks,
 /// ramming, and terrain crashes are still instant kills.
@@ -42,10 +46,17 @@ pub fn apply_input(velocity: Vec2, facing: f32, input: &PlayerInput, dt: f32) ->
     (vel, new_facing)
 }
 
-/// Pure drag + gravity + clamp step.
-pub fn apply_forces(velocity: Vec2, dt: f32) -> Vec2 {
+/// Pure drag + gravity + clamp step. `gravity_armed` gates the gravity
+/// term so a freshly-spawned pilot can sit still until they choose to
+/// thrust — see `Entity::gravity_armed`. Drag still applies either way,
+/// but at rest drag is zero so the ship stays put.
+pub fn apply_forces(velocity: Vec2, dt: f32, gravity_armed: bool) -> Vec2 {
     let drag = velocity * -PLAYER_DRAG;
-    let gravity = Vec2::new(0.0, -PLAYER_GRAVITY);
+    let gravity = if gravity_armed {
+        Vec2::new(0.0, -PLAYER_GRAVITY)
+    } else {
+        Vec2::ZERO
+    };
     let mut vel = velocity + (gravity + drag) * dt;
     if let Some(clamped) = util::clamp_velocity(vel, PLAYER_MAX_SPEED) {
         vel = clamped;
@@ -87,7 +98,7 @@ mod tests {
             let (v, _) = apply_input(vel, 0.0, &input, dt());
             vel = v;
             pos += vel * dt();
-            vel = apply_forces(vel, dt());
+            vel = apply_forces(vel, dt(), true);
         }
         assert!(
             pos.y > 50.0,
@@ -101,7 +112,31 @@ mod tests {
     #[test]
     fn velocity_clamps_to_max_speed() {
         let mut vel = Vec2::new(0.0, 1000.0);
-        vel = apply_forces(vel, dt());
+        vel = apply_forces(vel, dt(), true);
         assert!(vel.length() <= PLAYER_MAX_SPEED + 1e-3);
+    }
+
+    #[test]
+    fn no_gravity_while_unarmed_keeps_player_still() {
+        // A pilot who has not yet thrust should sit perfectly still — no
+        // gravity pull, no drag-driven creep. Half a second of unarmed
+        // ticks must leave the ship at its origin with zero velocity.
+        let mut vel = Vec2::ZERO;
+        let mut pos = Vec2::ZERO;
+        for _ in 0..30 {
+            pos += vel * dt();
+            vel = apply_forces(vel, dt(), false);
+        }
+        assert_eq!(vel, Vec2::ZERO);
+        assert_eq!(pos, Vec2::ZERO);
+    }
+
+    #[test]
+    fn gravity_when_armed_pulls_player_down() {
+        let mut vel = Vec2::ZERO;
+        for _ in 0..30 {
+            vel = apply_forces(vel, dt(), true);
+        }
+        assert!(vel.y < 0.0, "armed pilot should accelerate downward, got {:?}", vel);
     }
 }

@@ -110,6 +110,12 @@ pub struct Entity {
     /// the move-step branch trivial and leaves room for other behaviors
     /// to opt in (e.g. a future "smart bomb" that also detonates).
     pub detonates_on_terrain: bool,
+    /// Player ships start with gravity disabled so a freshly-spawned pilot
+    /// doesn't drift into the ground while they're still figuring out the
+    /// controls. The first thrust input latches this on; from that point
+    /// `player::apply_forces` applies gravity normally. Sim-only — never
+    /// surfaces on the wire.
+    pub gravity_armed: bool,
 }
 
 impl Entity {
@@ -136,10 +142,20 @@ impl Entity {
             accel: Vec2::ZERO,
             source: None,
             detonates_on_terrain: false,
+            // Newly-spawned pilot: gravity stays off until they thrust.
+            gravity_armed: false,
         }
     }
 
     pub fn shot(id: EntityId, owner: ShotOwner, pos: Vec2, vel: Vec2, facing: f32) -> Self {
+        // Player bullets fly farther than enemy bullets because the pilot
+        // is usually moving (and dodging) while shooting. The extra
+        // life-time lets the shot still cover a meaningful distance even
+        // after the pilot peels off.
+        let ttl = match owner {
+            ShotOwner::Player(_) => crate::player::PLAYER_SHOT_LIFE,
+            _ => crate::world::SHOT_LIFE,
+        };
         Entity {
             id,
             kind: EntityKind::Shot { owner },
@@ -149,7 +165,7 @@ impl Entity {
             turret_facing: 0.0,
             bbox: crate::world::SHOT_BBOX,
             alive: true,
-            ttl: Some(crate::world::SHOT_LIFE),
+            ttl: Some(ttl),
             shot_cooldown: 0.0,
             hp: 0,
             max_hp: 0,
@@ -159,6 +175,7 @@ impl Entity {
             accel: Vec2::ZERO,
             source: None,
             detonates_on_terrain: false,
+            gravity_armed: true,
         }
     }
 
@@ -207,6 +224,7 @@ impl Entity {
             accel: Vec2::ZERO,
             source: None,
             detonates_on_terrain: false,
+            gravity_armed: true,
         }
     }
 
@@ -233,6 +251,7 @@ impl Entity {
             accel: Vec2::ZERO,
             source: None,
             detonates_on_terrain: false,
+            gravity_armed: true,
         }
     }
 
