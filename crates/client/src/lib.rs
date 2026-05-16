@@ -8,7 +8,7 @@
 use ggez::conf;
 use ggez::event::EventHandler;
 use ggez::glam::Vec2;
-use ggez::graphics::{self, Canvas, Color, DrawParam, Mesh};
+use ggez::graphics::{self, Canvas, Color, DrawParam, InstanceArray, Mesh};
 use ggez::input::keyboard::KeyInput;
 use ggez::{Context, ContextBuilder, GameResult};
 
@@ -35,6 +35,7 @@ use crate::render::entities::{
     PLAYER_COLOR, PLAYER_SHOT_COLOR, TANK_COLOR, TANK_SHOT_COLOR, TANK_TREAD_BAND_Y,
     TANK_TREAD_HALF_WIDTH, TANK_TREAD_LINK_COLOR, TANK_TREAD_LINK_SPACING, TANK_TURRET_PIVOT_Y,
 };
+use crate::render::instance_batch::InstanceQuadBatch;
 use crate::render::particles::{DamageSmoker, ThrustEmitter};
 use crate::render::sky::{Sky, SKY_COLOR};
 use crate::widget::TextWidget;
@@ -44,8 +45,8 @@ use crate::widget::TextWidget;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppState {
     /// Title screen. Server is connected and the player may exist in the
-    /// world, but we draw the menu instead. Space launches the player into
-    /// `Playing` (sending `Respawn` if they're currently dead).
+    /// world, but we draw the menu instead. Space launches into `Playing`
+    /// (sending `Respawn` if they're currently dead).
     Menu,
     /// Live gameplay — full HUD, world rendering, input forwarded to server.
     Playing,
@@ -54,14 +55,13 @@ pub enum AppState {
     GameOver,
 }
 
-/// Visible window onto the world, in world units. The world itself is
-/// larger in both axes (`sim::world::WORLD_WIDTH` and `WORLD_HEIGHT`) so
-/// the camera can scroll instead of jumping at the seam or pinning to a
-/// single altitude band.
+/// Visible window onto the world, in world units. The world is larger on
+/// both axes so the camera can scroll instead of jumping at the seam or
+/// pinning to a single altitude band.
 const VIEW_WIDTH: f32 = 1280.0;
 const VIEW_HEIGHT: f32 = sim::world::VIEW_HEIGHT;
-/// How quickly the camera homes in on the player each second. 8.0 is a
-/// good middle ground — responsive but doesn't snap.
+/// How quickly the camera homes in on the player each second. 8.0 is a good
+/// middle ground — responsive without snapping.
 const CAMERA_FOLLOW_RATE: f32 = 8.0;
 
 fn print_instructions() {
@@ -69,10 +69,10 @@ fn print_instructions() {
     tracing::info!("Controls: Left/Right rotate, Up thrust, Space fire, Esc quit");
 }
 
-/// What to draw for an entity. Ships need their wings scaled separately
-/// from the body for a banking effect; tanks need an independent turret
-/// rotation; everything else is a single mesh. New entity-render shapes
-/// (helicopters, gunboats, ...) join this enum.
+/// What to draw for an entity. Ships need their wings scaled separately from
+/// the body for a banking effect; tanks need an independent turret rotation;
+/// everything else is a single mesh. New entity-render shapes (helicopters,
+/// gunboats, ...) join this enum.
 enum EntityVisual<'a> {
     Ship { ship: &'a ShipMesh, tint: Color },
     Tank { tank: &'a TankMesh, tint: Color },
@@ -80,9 +80,9 @@ enum EntityVisual<'a> {
 }
 
 /// Pick the right `EntityVisual` for a given entity kind. Each kind has a
-/// dedicated mesh built procedurally at startup (see `render::entities`);
-/// the color here multiplies against the mesh's white vertices so we can
-/// retint at draw time without re-uploading geometry.
+/// dedicated mesh built procedurally at startup (see `render::entities`); the
+/// tint multiplies against the mesh's white vertices so we can retint at draw
+/// time without re-uploading geometry.
 fn visual_for_kind<'a>(meshes: &'a EntityMeshes, kind: &EntityKind) -> EntityVisual<'a> {
     use sim::entity::ShotOwner;
     match kind {
@@ -119,15 +119,15 @@ fn visual_for_kind<'a>(meshes: &'a EntityMeshes, kind: &EntityKind) -> EntityVis
     }
 }
 
-/// Dead-reckoned position for `e` given how long ago the snapshot
-/// arrived. The server's authoritative position lags by ~50 ms (one
-/// snapshot interval); rendering at `pos + vel * elapsed` masks the
-/// stair-step that the raw snapshot produces. We clamp the lookahead
-/// so packet loss or a hidden-tab pause doesn't fling sprites across
-/// the world before the next snapshot lands. X wraps with the world.
+/// Dead-reckoned position for `e` given how long ago the snapshot arrived.
+/// The server's authoritative position lags by ~50 ms (one snapshot
+/// interval); rendering at `pos + vel * elapsed` masks the stair-step that
+/// the raw snapshot produces. The lookahead is clamped so packet loss or a
+/// hidden-tab pause doesn't fling sprites across the world before the next
+/// snapshot lands. X wraps with the world.
 fn extrapolated_pos(e: &EntityState, time_since_snapshot: f32) -> Vec2 {
-    // 120 ms covers two snapshot intervals — enough to ride out one
-    // missed packet without letting drift accumulate visibly.
+    // 120 ms covers two snapshot intervals — enough to ride out one missed
+    // packet without letting drift accumulate visibly.
     const MAX_LOOKAHEAD_SECS: f32 = 0.12;
     let t = time_since_snapshot.min(MAX_LOOKAHEAD_SECS);
     let world_w = sim::world::WORLD_WIDTH;
@@ -138,9 +138,8 @@ fn extrapolated_pos(e: &EntityState, time_since_snapshot: f32) -> Vec2 {
 }
 
 /// Rough half-extent (world units) of each entity kind's mesh. Used to
-/// decide whether to draw an entity at a wrap-mirrored copy on the
-/// opposite side of the world seam. Kept generous so we never pop a
-/// sprite in late.
+/// decide whether to draw a wrap-mirrored copy at the opposite side of the
+/// world seam. Kept generous so we never pop a sprite in late.
 fn sprite_half_extent(kind: &EntityKind) -> f32 {
     use sim::entity::ShotOwner;
     match kind {
@@ -155,21 +154,20 @@ fn sprite_half_extent(kind: &EntityKind) -> f32 {
     }
 }
 
-/// Draw the animated tread links for one tank on top of its chassis.
-/// Links are anchored to ground X (a function of `pos.x` alone) so they
-/// appear to slide backwards as the chassis rolls forward. `cand` is
-/// the chassis's wrap-adjusted world X for the current draw copy.
-fn draw_tank_treads(
-    canvas: &mut Canvas,
+/// Push animated tread-link DrawParams for one tank into the shared
+/// `InstanceArray`. Links are anchored to ground X (a function of `pos.x`
+/// alone) so they appear to slide backwards as the chassis rolls forward.
+/// `cand` is the chassis's wrap-adjusted world X for the current draw copy.
+fn fill_tank_treads(
+    treads: &mut InstanceArray,
     camera: &Camera,
-    tank: &TankMesh,
     pos: Vec2,
     cand: f32,
     scale: f32,
 ) {
     let spacing = TANK_TREAD_LINK_SPACING;
-    // Range of integer link indices whose world X falls within the
-    // tread band centred on `pos.x`.
+    // Range of integer link indices whose world X falls within the tread band
+    // centred on `pos.x`.
     let k_min = ((pos.x - TANK_TREAD_HALF_WIDTH) / spacing).ceil() as i32;
     let k_max = ((pos.x + TANK_TREAD_HALF_WIDTH) / spacing).floor() as i32;
     let band_world_y = pos.y + TANK_TREAD_BAND_Y;
@@ -177,8 +175,7 @@ fn draw_tank_treads(
         let local_offset = (k as f32) * spacing - pos.x;
         let world = Vec2::new(cand + local_offset, band_world_y);
         let screen = camera.world_to_screen(world);
-        canvas.draw(
-            &tank.tread_link,
+        treads.push(
             DrawParam::new()
                 .dest(screen)
                 .rotation(0.0)
@@ -192,25 +189,24 @@ pub struct MainState {
     asset_manager: AssetManager,
     camera: Camera,
     net: Box<dyn Net>,
-    /// Procedurally-built mesh per entity kind. Cheaper to retint at
-    /// draw time than to reload art.
+    /// Procedurally-built mesh per entity kind. Cheaper to retint at draw
+    /// time than to reload art.
     meshes: EntityMeshes,
     sky: Sky,
-    /// Lazily-built terrain mesh + grass. Rebuilt when the server provides a new layout
-    /// today: never after the first snapshot, but the renderer compares signatures every
-    /// sync so it's safe.
+    /// Cached terrain mesh + decorations. Resynced from each snapshot — a
+    /// signature compare short-circuits when nothing changed.
     terrain_renderer: render::terrain::TerrainRenderer,
     shot_sound_id: SoundId,
     hit_sound_id: SoundId,
     input: InputState,
     local_player_id: Option<PlayerId>,
     latest_snapshot: Option<Snapshot>,
-    /// True until we receive the first snapshot — we snap the camera
-    /// straight onto the player instead of easing in.
+    /// True once we've snapped the camera onto the first snapshot — earlier
+    /// frames pin instead of easing in.
     camera_initialized: bool,
-    /// Monotonic counter we tag outgoing inputs with. The server doesn't yet
-    /// use this for resimulation but the field shape matches what Phase 3
-    /// will need.
+    /// Monotonic counter we tag outgoing inputs with. The server doesn't use
+    /// it for resimulation today, but the field shape matches what a future
+    /// rollback path will need.
     next_input_tick: Tick,
     gui_dirty: bool,
     score_text: TextWidget,
@@ -222,27 +218,36 @@ pub struct MainState {
     app_state: AppState,
     /// Title screen owns its own animation; ticked while `app_state == Menu`.
     menu: Menu,
-    /// Edge-triggered: Space pressed in `Menu`. Consumed at the next update.
+    /// Edge-triggered: Space pressed in `Menu`. Consumed at next update.
     request_start: bool,
-    /// Edge-triggered: any key pressed in `GameOver`. Consumed at the next update.
+    /// Edge-triggered: any key pressed in `GameOver`. Consumed at next update.
     request_back_to_menu: bool,
     cached_score: i32,
     cached_level: i32,
-    /// Seconds since `latest_snapshot` arrived. The server snapshots at
-    /// 20 Hz but we render at ≥60 Hz, so without extrapolation entities
-    /// visibly step every 50 ms. We dead-reckon `pos + vel * elapsed`
-    /// between snapshots and reset to 0 on each new one.
+    /// Seconds since `latest_snapshot` arrived. The server snapshots at 20 Hz
+    /// but we render at ≥60 Hz, so without extrapolation entities visibly step
+    /// every 50 ms. We dead-reckon `pos + vel * elapsed` between snapshots and
+    /// reset to 0 on each new one.
     time_since_snapshot: f32,
-    /// Active particle bursts. Owned client-side; not part of the sim.
-    /// Each `PlayerKilled` event spawns one.
+    /// Active particle bursts. Client-side only; each `PlayerKilled` /
+    /// `EnemyKilled` / `ShellExploded` event spawns one.
     explosions: Vec<Explosion>,
     /// Monotonic counter used as a per-explosion RNG seed so simultaneous
     /// bursts don't render identically.
     next_explosion_seed: u64,
     /// Flame trail behind any thrusting player.
     thrust: ThrustEmitter,
-    /// Brown smoke streaming from damaged players.
+    /// Brown smoke streaming from damaged ships and tanks.
     smoke: DamageSmoker,
+    /// Quad particles drawn *before* entities — currently just thrust trails,
+    /// so the flame appears to come out of the tail rather than over the ship.
+    behind_batch: InstanceQuadBatch,
+    /// Quad particles drawn *on top of* entities — smoke, spark bursts, and
+    /// explosion particles.
+    overlay_batch: InstanceQuadBatch,
+    /// Tank-tread links, batched into one draw call per frame so multi-tank
+    /// scenes don't pay one draw per link.
+    tread_batch: InstanceArray,
     /// Set once `net.is_connected()` first returns false, to swap the overlay
     /// text and skip the input-send loop.
     disconnected: bool,
@@ -257,6 +262,9 @@ impl MainState {
         let (drawable_w, drawable_h) = ctx.gfx.drawable_size();
 
         let meshes = EntityMeshes::build(ctx)?;
+        let behind_batch = InstanceQuadBatch::new(ctx)?;
+        let overlay_batch = InstanceQuadBatch::new(ctx)?;
+        let tread_batch = InstanceArray::new(ctx, None);
         let world_w = sim::world::WORLD_WIDTH;
         let world_h = sim::world::WORLD_HEIGHT;
         let sky = Sky::build(ctx, Vec2::new(world_w, world_h), 0xC10D_C10D)?;
@@ -274,9 +282,9 @@ impl MainState {
         disconnected_text.set_text("Connecting…", 24.0);
         let menu = Menu::new(ctx, &mut am)?;
 
-        // Use the deepest valley as the camera's floor reference so the
-        // pilot can dive into low spots without the camera bottoming
-        // out on the tallest peak.
+        // Use the deepest valley as the camera's floor reference so the pilot
+        // can dive into low spots without the camera bottoming out on the
+        // tallest peak.
         let ground_y = sim::terrain::GROUND_MIN_HEIGHT;
         let camera = Camera::new(
             drawable_w,
@@ -318,6 +326,9 @@ impl MainState {
             next_explosion_seed: 1,
             thrust: ThrustEmitter::new(0xF1A4E_AB1u64),
             smoke: DamageSmoker::new(0x5_E0FFEEu64),
+            behind_batch,
+            overlay_batch,
+            tread_batch,
             disconnected: false,
             time_since_snapshot: 0.0,
         })
@@ -339,18 +350,18 @@ impl MainState {
                 self.gui_dirty = true;
             }
             ServerMsg::Snapshot(snap) => {
-                // Terrain doesn't change today, but both the camera clamp
-                // and the cached terrain mesh need to follow if a future
-                // server hands us a new layout. `sync` is a no-op when
-                // the terrain matches the cached signature.
+                // Terrain doesn't change today, but the camera clamp and
+                // cached terrain mesh need to follow a future server that
+                // hands us a new layout. `sync` is a no-op when the terrain
+                // matches the cached signature.
                 self.camera
                     .set_ground_y(sim::terrain::min_surface_y(&snap.terrain));
                 self.terrain_renderer.sync(ctx, &snap.terrain);
                 self.latest_snapshot = Some(snap);
                 self.time_since_snapshot = 0.0;
-                // If we requested a respawn while in GameOver / Menu and
-                // our entity is back in the world, drop the overlay so the
-                // next snapshot draws live gameplay.
+                // If we requested a respawn while in GameOver / Menu and our
+                // entity is back in the world, drop the overlay so the next
+                // snapshot draws live gameplay.
                 if self.app_state == AppState::GameOver && self.local_player().is_some() {
                     self.app_state = AppState::Playing;
                     self.gui_dirty = true;
@@ -358,9 +369,9 @@ impl MainState {
             }
             ServerMsg::Events { events, .. } => {
                 // While the title screen is up we don't want incidental
-                // explosions / shot sounds from the live world leaking
-                // through (the player isn't watching it). Still process
-                // them in Playing/GameOver so deaths and audio land.
+                // explosions / shot sounds from the live world leaking through
+                // (the player isn't watching it). Still process them in
+                // Playing/GameOver so deaths and audio land.
                 if self.app_state != AppState::Menu {
                     self.handle_game_events(ctx, &events);
                 }
@@ -369,10 +380,10 @@ impl MainState {
     }
 
     fn play_sound(&self, ctx: &Context, id: SoundId) {
-        // ggez's wasm `play_detached` is now a no-op while the browser
-        // `AudioContext` is suspended (so we don't leak rodio sinks), but
-        // building a `Source` still touches the filesystem and allocates,
-        // so skip the work entirely until audio is actually running.
+        // ggez's wasm `play_detached` no-ops while the browser `AudioContext`
+        // is suspended (so we don't leak rodio sinks), but building a `Source`
+        // still touches the filesystem and allocates. Skip the work entirely
+        // until audio is actually running.
         if !ctx.audio.is_running() {
             return;
         }
@@ -391,21 +402,19 @@ impl MainState {
                     self.gui_dirty = true;
                 }
                 GameEvent::EnemyDamaged { pos, .. } => {
-                    // Smaller feedback than a kill: a brief spark shower
-                    // plus a few smoke puffs so the player can tell the
-                    // bullet landed even though the hostile is still
-                    // alive. Sparks read more clearly than smoke against
-                    // armored hulls (tanks especially).
+                    // Smaller feedback than a kill: a brief spark shower plus
+                    // a few smoke puffs so the player can tell the bullet
+                    // landed even though the hostile is still alive. Sparks
+                    // read more clearly than smoke against armored hulls.
                     let p = Vec2::new(pos.x, pos.y);
                     self.smoke.spark_burst(p, 10);
                     self.smoke.puff_burst(p, 4);
                     self.play_sound(ctx, self.hit_sound_id);
                 }
                 GameEvent::PlayerDamaged { pos, .. } => {
-                    // Player hit feedback: sparks plus smoke. The
-                    // steady-state smoke trail is driven from snapshot
-                    // HP, but a one-shot burst sells the impact at the
-                    // right moment.
+                    // Player hit feedback: sparks plus smoke. The steady-state
+                    // smoke trail is driven from snapshot HP; a one-shot burst
+                    // sells the impact at the right moment.
                     let p = Vec2::new(pos.x, pos.y);
                     self.smoke.spark_burst(p, 8);
                     self.smoke.puff_burst(p, 4);
@@ -419,9 +428,8 @@ impl MainState {
                     self.spawn_explosion(Vec2::new(pos.x, pos.y), ExplosionStyle::for_cause(cause));
                     self.play_sound(ctx, self.hit_sound_id);
                     // Only flip into GameOver if we're currently playing —
-                    // dying while still on the title screen leaves the menu
-                    // intact and we'll just Respawn whenever the player
-                    // hits Space.
+                    // dying on the title screen leaves the menu intact; we'll
+                    // Respawn whenever the player next hits Space.
                     if Some(*player_id) == self.local_player_id
                         && self.app_state == AppState::Playing
                     {
@@ -430,10 +438,10 @@ impl MainState {
                     }
                 }
                 GameEvent::ShellExploded { pos } => {
-                    // Tank shells terminate in a chunky boom regardless
-                    // of whether they hit dirt, a tank, or the player.
-                    // Pair the dust-style explosion with the standard
-                    // hit sound so the impact lands audibly.
+                    // Tank shells terminate in a chunky boom regardless of
+                    // whether they hit dirt, a tank, or the player. Pair the
+                    // dust-style explosion with the standard hit sound so the
+                    // impact lands audibly.
                     self.spawn_explosion(Vec2::new(pos.x, pos.y), ExplosionStyle::DustAndEmbers);
                     self.play_sound(ctx, self.hit_sound_id);
                 }
@@ -448,10 +456,6 @@ impl MainState {
         let seed = self.next_explosion_seed;
         self.next_explosion_seed = self.next_explosion_seed.wrapping_add(1);
         self.explosions.push(Explosion::new(pos, style, seed));
-    }
-
-    fn extrapolated_pos(&self, e: &EntityState) -> Vec2 {
-        extrapolated_pos(e, self.time_since_snapshot)
     }
 
     fn local_player(&self) -> Option<&EntityState> {
@@ -513,26 +517,37 @@ impl MainState {
         ));
     }
 
-    /// Draw an entity at every visible toroidal copy. Only X wraps — Y
-    /// is a hard wall in the sim — so we ask the camera for the up-to-
-    /// three candidate X positions that land inside the viewport.
+    /// Draw an entity at every visible toroidal copy. Only X wraps — Y is a
+    /// hard wall in the sim — so we ask the camera for the up-to-three
+    /// candidate X positions that land inside the viewport.
     ///
-    /// Ships draw their body and wings separately so the wings can be
-    /// scaled along the local-X axis (`ship_wing_factor`) to fake banking.
-    /// Pre-rotation scaling means the foreshortening rotates correctly
-    /// with the ship's facing.
-    fn draw_entity(&self, canvas: &mut Canvas, entity: &EntityState) {
-        let visual = visual_for_kind(&self.meshes, &entity.kind);
+    /// Ships draw body and wings separately so the wings can be scaled along
+    /// the local-X axis (`ship_wing_factor`) to fake banking. Pre-rotation
+    /// scaling means the foreshortening rotates correctly with facing.
+    ///
+    /// Tank tread links are pushed into `tread_batch` (a shared
+    /// `InstanceArray`) rather than drawn here, so all tanks' treads land in
+    /// one draw call when the caller flushes the batch. Takes explicit refs
+    /// (rather than `&self`) so the caller can pass a `&mut` borrow of one of
+    /// MainState's fields alongside without tripping the borrow checker.
+    fn draw_entity(
+        canvas: &mut Canvas,
+        tread_batch: &mut InstanceArray,
+        meshes: &EntityMeshes,
+        camera: &Camera,
+        entity: &EntityState,
+        time_since_snapshot: f32,
+    ) {
+        let visual = visual_for_kind(meshes, &entity.kind);
         let half = sprite_half_extent(&entity.kind);
-        let scale = self.camera.scale();
-        let pos = self.extrapolated_pos(entity);
-        for cand in self
-            .camera
+        let scale = camera.scale();
+        let pos = extrapolated_pos(entity, time_since_snapshot);
+        for cand in camera
             .world_x_offsets_for(pos.x, half)
             .into_iter()
             .flatten()
         {
-            let screen = self.camera.world_to_screen(Vec2::new(cand, pos.y));
+            let screen = camera.world_to_screen(Vec2::new(cand, pos.y));
             match visual {
                 EntityVisual::Single { mesh, tint } => {
                     let params = DrawParam::new()
@@ -552,11 +567,9 @@ impl MainState {
                     canvas.draw(&ship.body, base.scale([scale, scale]));
                 }
                 EntityVisual::Tank { tank, tint } => {
-                    // Chassis: body angle determines whether we flip
-                    // horizontally. Body facing of +PI/2 (right) yields
-                    // scale_x = +1; -PI/2 (left) yields -1; falling back
-                    // to +1 when facing is exactly 0 (just-spawned tank
-                    // before it picked a side).
+                    // Body facing of +PI/2 (right) yields scale_x = +1; -PI/2
+                    // (left) yields -1; default +1 for a just-spawned tank
+                    // before it picks a side (facing == 0).
                     let body_dir = if entity.facing < 0.0 { -1.0 } else { 1.0 };
                     canvas.draw(
                         &tank.chassis,
@@ -566,16 +579,13 @@ impl MainState {
                             .scale([scale * body_dir, scale])
                             .color(tint),
                     );
-                    // Tread link overlay — drawn at world positions
-                    // anchored to the ground (a function of pos.x), so
-                    // they appear to scroll opposite to motion as the
-                    // chassis rolls. Independent of body_dir flip.
-                    draw_tank_treads(canvas, &self.camera, tank, pos, cand, scale);
-                    // Turret: pivots on top of the hull rather than at
-                    // the chassis center, so we offset the destination
-                    // by `TANK_TURRET_PIVOT_Y` world units in Y-up.
+                    // Tread links queue into the batched flush — one draw call
+                    // covers every tank's treads.
+                    fill_tank_treads(tread_batch, camera, pos, cand, scale);
+                    // Turret pivots on top of the hull, so offset the
+                    // destination by `TANK_TURRET_PIVOT_Y` world units (Y-up).
                     let turret_world = Vec2::new(cand, pos.y + TANK_TURRET_PIVOT_Y);
-                    let turret_screen = self.camera.world_to_screen(turret_world);
+                    let turret_screen = camera.world_to_screen(turret_world);
                     canvas.draw(
                         &tank.turret,
                         DrawParam::new()
@@ -589,36 +599,61 @@ impl MainState {
         }
     }
 
-    /// Render the live world + HUD (Playing / GameOver). The Menu draw
-    /// path is handled separately in `draw`.
+    /// Render the live world + HUD (Playing / GameOver). The Menu draw path
+    /// is handled separately in `draw`.
+    ///
+    /// Particle layers and tank treads are pushed into shared `InstanceArray`s
+    /// and flushed at one point each, so a scene with hundreds of particles
+    /// still issues only a couple of draw calls. Order: sky → terrain →
+    /// thrust → entities → smoke / sparks / explosions → HUD.
     fn draw_world(&mut self, _ctx: &mut Context, canvas: &mut Canvas) {
         if let Some(snap) = &self.latest_snapshot {
             // Background: cream sky + parallax clouds, behind everything.
             self.sky.draw(canvas, &self.camera);
 
-            // Terrain (soil polygon + horizon stripe + grass tufts)
-            // underneath the play layer. The renderer was synced from
-            // the latest snapshot in `handle_server_msg`, so we don't
-            // re-touch `snap.terrain` here.
+            // Terrain (soil polygon + horizon stripe + grass tufts) under the
+            // play layer. The renderer was synced from the latest snapshot in
+            // `handle_server_msg`, so we don't re-touch `snap.terrain` here.
             self.terrain_renderer.draw(canvas, &self.camera);
 
-            // Thrust trails behind ships (drawn before the ships so the
-            // flame appears to come out of the tail rather than over it).
-            self.thrust.draw(canvas, &self.camera);
+            // Thrust trails behind ships — collected into a single batched
+            // draw call below.
+            self.behind_batch.begin();
+            self.thrust.fill(&mut self.behind_batch, &self.camera);
+            self.behind_batch.flush(canvas);
 
+            // Tank tread links land in one batched draw call after all chassis
+            // are emitted.
+            self.tread_batch.clear();
             for entity in &snap.entities {
                 if !entity.alive {
                     continue;
                 }
-                self.draw_entity(canvas, entity);
+                Self::draw_entity(
+                    canvas,
+                    &mut self.tread_batch,
+                    &self.meshes,
+                    &self.camera,
+                    entity,
+                    self.time_since_snapshot,
+                );
+            }
+            if !self.tread_batch.instances().is_empty() {
+                canvas.draw_instanced_mesh(
+                    self.meshes.tank.tread_link.clone(),
+                    &self.tread_batch,
+                    DrawParam::default(),
+                );
             }
 
-            // Damage smoke on top of ships so torn-up hulls smolder
-            // visibly, then explosions on top of everything.
-            self.smoke.draw(canvas, &self.camera);
+            // Damage smoke, spark bursts, and explosion particles share one
+            // overlay batch — one draw call for all of them.
+            self.overlay_batch.begin();
+            self.smoke.fill(&mut self.overlay_batch, &self.camera);
             for ex in &self.explosions {
-                ex.draw(canvas, &self.camera);
+                ex.fill(&mut self.overlay_batch, &self.camera);
             }
+            self.overlay_batch.flush(canvas);
 
             self.level_text.draw(canvas);
             self.score_text.draw(canvas);
@@ -665,15 +700,14 @@ impl MainState {
     }
 
     /// HP bar pinned to the top-left, just under the score/level text. Shows
-    /// only when the local player has a meaningful HP — i.e. they're alive
-    /// and the snapshot carries a max_hp > 0.
+    /// only when the local player is alive and the snapshot carries a
+    /// meaningful `max_hp > 0`.
     fn draw_hp_bar(&self, canvas: &mut Canvas, hp: i16, max_hp: i16) {
         let bar_w: f32 = 200.0;
         let bar_h: f32 = 10.0;
         let x: f32 = 10.0;
         let y: f32 = 36.0;
-        // Background — semi-translucent dark plate so the bar reads
-        // against any sky color.
+        // Semi-translucent dark plate so the bar reads against any sky color.
         canvas.draw(
             &graphics::Quad,
             DrawParam::new()
@@ -714,13 +748,9 @@ impl EventHandler for MainState {
         // Bound catch-up work so re-foregrounding doesn't stall on a full queue.
         const MAX_DRAIN_PER_UPDATE: usize = 64;
 
-        // Skip everything while hidden — playing audio for queued events
-        // leaks rodio sinks on wasm. Drain residual dt so unhiding doesn't
-        // fire thousands of catch-up input ticks.
-        if !ctx.gfx.is_page_visible() {
-            while ctx.time.check_update_time(DESIRED_FPS) {}
-            return Ok(());
-        }
+        // ggez's wasm event loop skips calling `update` entirely when
+        // `document.hidden`, so we don't need our own hidden-tab guard here —
+        // see the comment in ggez's `event::about_to_wait`.
 
         let mut drained = 0;
         while drained < MAX_DRAIN_PER_UPDATE {
@@ -771,8 +801,8 @@ impl EventHandler for MainState {
             self.net.send(&input_msg);
         }
 
-        // Step active explosions on real elapsed time so they look the
-        // same regardless of the fixed-step input cadence.
+        // Step active explosions on real elapsed time so they look the same
+        // regardless of the fixed-step input cadence.
         let dt = ctx.time.delta().as_secs_f32();
         self.time_since_snapshot += dt;
         for ex in &mut self.explosions {
@@ -780,18 +810,16 @@ impl EventHandler for MainState {
         }
         self.explosions.retain(|e| !e.done());
 
-        // Drive camera + particle systems from the latest snapshot. The
-        // camera tracks the local player horizontally; particle emitters
-        // read `thrusting` / `hp` directly from the snapshot so a freshly-
-        // taken hit shows smoke before the next event arrives. Take()ing
-        // the snapshot lets us pass &self to extrapolated_pos while also
-        // mutating self.{camera,thrust,smoke}; we put it back before
-        // returning so subsequent reads still see the latest state. Cheap
-        // — Option::take/replace just moves the snapshot, no clone.
+        // Drive camera + particle systems from the latest snapshot. The camera
+        // tracks the local player; particle emitters read `thrusting` / `hp`
+        // directly from the snapshot so a freshly-taken hit shows smoke before
+        // the next event arrives. We `take()` the snapshot so we can pass
+        // `&snap` to extrapolated_pos while also mutating
+        // `self.{camera,thrust,smoke}`, then put it back before returning.
+        // Cheap — `Option::take/replace` just moves the snapshot, no clone.
         let time_since_snapshot = self.time_since_snapshot;
         if let Some(snap) = self.latest_snapshot.take() {
-            // Local player drives the camera. Snap on first frame, ease
-            // afterwards.
+            // Local player drives the camera. Snap on first frame, ease after.
             let local = self.local_player_id.and_then(|pid| {
                 snap.entities.iter().find(|e| match e.kind {
                     EntityKind::Player { player_id } => player_id == pid && e.alive,
@@ -807,13 +835,11 @@ impl EventHandler for MainState {
                     self.camera.follow(target, dt * CAMERA_FOLLOW_RATE);
                 }
             }
-            // Pump every player's thrust/smoke emitters every frame so
-            // they stop cleanly when the ship dies or the flag flips.
-            // Tanks also smoke when damaged (lower intensity so the
-            // "a little bit of smoke" reads as battlefield damage rather
-            // than a death-spiral). Smoke is anchored to the turret
-            // dome so it puffs out of the hull top instead of the
-            // treads.
+            // Pump every player's thrust/smoke emitters every frame so they
+            // stop cleanly when the ship dies or the flag flips. Tanks also
+            // smoke when damaged (lower intensity — battlefield damage, not a
+            // death spiral). Tank smoke is anchored to the turret dome so it
+            // puffs out of the hull top instead of the treads.
             for e in &snap.entities {
                 if !e.alive {
                     continue;
@@ -831,18 +857,17 @@ impl EventHandler for MainState {
                             .note_health(e.id, smoke_pos, e.hp, e.max_hp, 0.55, dt);
                     }
                     EntityKind::Enemy => {
-                        // Enemies never heal, so a steady trail reads as
-                        // a wounded plane heading for a crash. Less dense
-                        // than the player's because the dot is smaller and
-                        // we don't want a sky full of brown clouds.
+                        // Enemies never heal, so a steady trail reads as a
+                        // wounded plane heading for a crash. Less dense than
+                        // the player's so the sky doesn't fill with brown.
                         self.smoke.note_health(e.id, pos, e.hp, e.max_hp, 0.7, dt);
                     }
                     _ => {}
                 }
             }
-            // Forget particles for entities not in the snapshot. Linear
-            // scan over the (small) entity list beats allocating a HashSet
-            // every frame for typical entity counts.
+            // Forget particles for entities not in the snapshot. Linear scan
+            // over the (small) entity list beats allocating a HashSet every
+            // frame for typical entity counts.
             let entities = &snap.entities;
             self.thrust
                 .retain_ids(|id| entities.iter().any(|e| e.id == id));
@@ -880,9 +905,8 @@ impl EventHandler for MainState {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        if !ctx.gfx.is_page_visible() {
-            return Ok(());
-        }
+        // ggez skips `draw` when the page is hidden (see its `event` module);
+        // no extra gating needed here.
         let mut canvas = graphics::Canvas::from_frame(ctx, SKY_COLOR);
 
         match self.app_state {
@@ -1053,18 +1077,18 @@ pub fn wasm_start() -> Result<(), wasm_bindgen::JsValue> {
     console_error_panic_hook::set_once();
     // tracing-wasm defaults to `report_logs_in_timings: true`, which calls
     // `performance.mark()` + `performance.measure()` for every span — the
-    // browser then retains those PerformanceMark/Measure entries forever
-    // (no rotation), leaking ~70KB/sec while the game is running. Disable
-    // the timings path; we still get console.log output.
+    // browser retains those PerformanceMark/Measure entries forever (no
+    // rotation), leaking ~70 KB/s while the game runs. Disable the timings
+    // path; we still get console.log output.
     let mut tracing_cfg = tracing_wasm::WASMLayerConfigBuilder::new();
     tracing_cfg.set_report_logs_in_timings(false);
     tracing_cfg.set_max_level(tracing::Level::INFO);
     tracing_wasm::set_as_global_default_with_config(tracing_cfg.build());
 
-    // ggez's WebGpuUnavailable error gets swallowed inside `run_with` (it
-    // only goes to console.error), so catch the most common cause —
-    // `navigator.gpu` missing entirely — up front and put a readable note
-    // in the page's status banner.
+    // ggez's WebGpuUnavailable error gets swallowed inside `run_with` (it only
+    // goes to console.error), so catch the most common cause — `navigator.gpu`
+    // missing entirely — up front and put a readable note in the page's
+    // status banner.
     if !webgpu_available() {
         show_init_error(
             "Your browser doesn't expose WebGPU. \

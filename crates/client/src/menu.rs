@@ -10,7 +10,9 @@
 //! the player comes back from a death.
 
 use ggez::glam::Vec2;
-use ggez::graphics::{Canvas, Color, DrawMode, DrawParam, Mesh, MeshBuilder, MeshData, Vertex};
+use ggez::graphics::{
+    Canvas, Color, DrawMode, DrawParam, InstanceArray, Mesh, MeshBuilder, MeshData, Vertex,
+};
 use ggez::{Context, GameResult};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -81,6 +83,9 @@ pub struct Menu {
     ships: Vec<BgShip>,
     clouds: Vec<BgCloud>,
     cloud_meshes: Vec<Mesh>,
+    /// Per-mesh `InstanceArray` reused each frame so all clouds sharing
+    /// a stamp land in a single draw call.
+    cloud_instances: Vec<InstanceArray>,
     /// Single 1×1 quad with vertex colors that interpolates from
     /// `MENU_SKY_TOP` at y=0 to `MENU_SKY_BOTTOM` at y=1. Drawn scaled to
     /// screen size each frame so a resize doesn't need a rebuild.
@@ -172,6 +177,9 @@ impl Menu {
         }
 
         let sky_gradient = gradient_quad(ctx, MENU_SKY_TOP, MENU_SKY_BOTTOM);
+        let cloud_instances: Vec<InstanceArray> = (0..cloud_meshes.len())
+            .map(|_| InstanceArray::new(ctx, None))
+            .collect();
 
         Ok(Menu {
             title,
@@ -182,6 +190,7 @@ impl Menu {
             ships,
             clouds,
             cloud_meshes,
+            cloud_instances,
             sky_gradient,
             elapsed: 0.0,
             last_screen: initial_screen,
@@ -250,15 +259,23 @@ impl Menu {
                 .scale([screen.x, screen.y]),
         );
 
+        // Clouds: one batched draw per stamp instead of one per cloud.
+        for inst in self.cloud_instances.iter_mut() {
+            inst.clear();
+        }
         for cloud in &self.clouds {
-            let mesh = &self.cloud_meshes[cloud.mesh_idx];
-            canvas.draw(
-                mesh,
+            self.cloud_instances[cloud.mesh_idx].push(
                 DrawParam::new()
                     .dest(cloud.pos)
                     .scale([cloud.scale, cloud.scale])
                     .color(CLOUD_COLOR),
             );
+        }
+        for (mesh, inst) in self.cloud_meshes.iter().zip(self.cloud_instances.iter()) {
+            if inst.instances().is_empty() {
+                continue;
+            }
+            canvas.draw_instanced_mesh(mesh.clone(), inst, DrawParam::default());
         }
 
         for ship in &self.ships {

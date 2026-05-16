@@ -14,9 +14,9 @@
 //! mountain bands can refuse passage by reporting a different surface
 //! (or `None`) without changing the AI.
 
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::FRAC_PI_2;
 
-use crate::util::Vec2;
+use crate::util::{self, Vec2};
 
 /// Collision radius. Sized to match the chassis silhouette — wide enough
 /// to cover the hull horizontally but tight enough that shots flying well
@@ -129,7 +129,7 @@ pub fn step(
         };
     };
 
-    let to_target = shortest_offset(pos, target_pos, world_width);
+    let to_target = util::toroidal_offset(pos, target_pos, world_width);
     let dist = to_target.length();
 
     // Chassis: roll toward target unless we're already in firing range.
@@ -176,9 +176,10 @@ pub fn step(
     // straight overhead at +Y gives angle 0.
     let aim_off = Vec2::new(to_target.x, to_target.y + lead_y);
     let target_angle = aim_off.x.atan2(aim_off.y);
-    let new_turret = steer_toward(turret_facing, target_angle, TANK_TURRET_TURN_RATE * dt);
+    let new_turret =
+        util::steer_toward_angle(turret_facing, target_angle, TANK_TURRET_TURN_RATE * dt);
 
-    let aim_error = angular_delta(new_turret, target_angle).abs();
+    let aim_error = util::signed_angular_delta(new_turret, target_angle).abs();
     let fire = aim_error < TANK_FIRE_CONE && dist < TANK_FIRE_RANGE;
 
     TankStep {
@@ -200,35 +201,6 @@ pub fn body_dir_from_facing(body_facing: f32) -> f32 {
     } else {
         0.0
     }
-}
-
-/// Shortest vector from `from` to `to`, accounting for X-wrap.
-fn shortest_offset(from: Vec2, to: Vec2, world_width: f32) -> Vec2 {
-    let mut dx = to.x - from.x;
-    let half = world_width * 0.5;
-    if dx > half {
-        dx -= world_width;
-    } else if dx < -half {
-        dx += world_width;
-    }
-    Vec2::new(dx, to.y - from.y)
-}
-
-/// Shortest signed angular delta `target - current` in `[-PI, PI]`.
-fn angular_delta(current: f32, target: f32) -> f32 {
-    let mut d = (target - current) % TAU;
-    if d > PI {
-        d -= TAU;
-    } else if d < -PI {
-        d += TAU;
-    }
-    d
-}
-
-fn steer_toward(current: f32, target: f32, max_step: f32) -> f32 {
-    let delta = angular_delta(current, target);
-    let step = delta.clamp(-max_step, max_step);
-    current + step
 }
 
 fn apply_drag(vel: Vec2, dt: f32) -> Vec2 {

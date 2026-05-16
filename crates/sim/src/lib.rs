@@ -1,12 +1,15 @@
 //! Pure deterministic simulation for Icarust.
 //!
 //! No I/O, no rendering, no global RNG, no wall-clock reads. Everything
-//! random goes through the [`World`]'s seeded `ChaCha8Rng`. Entities live
+//! random flows through the [`World`]'s seeded `ChaCha8Rng`. Entities live
 //! in a [`std::collections::BTreeMap`] keyed by [`EntityId`] so iteration
-//! order matches across machines.
+//! order matches across machines, which is what makes
+//! `(seed, input_history)` reproducible.
 //!
 //! `World::tick(&PlayerInputs, dt) -> Vec<GameEvent>` is the single
-//! authoritative step. `dt` is fixed at `1.0 / 60.0` in production.
+//! authoritative step. `dt` is fixed at `1.0 / 60.0` in production. AI
+//! (`enemy::step`, `tank::step`) and wave scheduling (`wave::WaveDirector`)
+//! live in their own modules but are driven from `World::tick`.
 
 pub mod enemy;
 pub mod entity;

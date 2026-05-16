@@ -8,13 +8,14 @@
 //! same.
 
 use ggez::glam::Vec2;
-use ggez::graphics::{self, Canvas, Color, DrawParam};
+use ggez::graphics::Color;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use sim::DeathCause;
 use sim::TerrainKind;
 
 use crate::render::camera::Camera;
+use crate::render::instance_batch::InstanceQuadBatch;
 
 /// How a given crash looks. Map `DeathCause` → `ExplosionStyle`. Adding a
 /// new terrain kind only changes the `for_cause` mapping.
@@ -88,29 +89,14 @@ impl Explosion {
         self.particles.is_empty()
     }
 
-    pub fn draw(&self, canvas: &mut Canvas, camera: &Camera) {
-        let scale = camera.scale();
+    pub fn fill(&self, batch: &mut InstanceQuadBatch, camera: &Camera) {
         for p in &self.particles {
             // Fade alpha to zero over the back half of the lifetime.
             let t = (p.life / p.max_life).clamp(0.0, 1.0);
             let alpha = (t * 1.6).min(1.0);
             let mut color = p.color;
             color.a = alpha;
-            let half = p.radius * scale;
-            // Particles near the world's X-wrap need to be drawn at every
-            // visible toroidal copy so an explosion that straddles the
-            // seam doesn't half-vanish.
-            for cand in camera.world_x_offsets_for(p.pos.x, p.radius).into_iter().flatten() {
-                let screen = camera.world_to_screen(Vec2::new(cand, p.pos.y));
-                let dest = Vec2::new(screen.x - half, screen.y - half);
-                canvas.draw(
-                    &graphics::Quad,
-                    DrawParam::new()
-                        .dest(dest)
-                        .scale([half * 2.0, half * 2.0])
-                        .color(color),
-                );
-            }
+            batch.push_world(camera, p.pos, p.radius, color);
         }
     }
 }

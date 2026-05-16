@@ -20,31 +20,26 @@ use crate::terrain::{self, TerrainBand};
 use crate::util::{self, Vec2};
 use crate::wave::{AliveCounts, SpawnRequest, WaveDirector, INITIAL_ENEMY_COUNT};
 
-/// World is wider than the visible viewport so the camera can scroll
-/// instead of wrapping at the screen edge. The X axis is still toroidal
-/// (sim::util::wrap_coord) — entities that fly off the right reappear on
-/// the left — but the client camera follows the local player and draws
-/// each entity in up to three positions (`x`, `x ± WORLD_WIDTH`) so the
-/// wrap is invisible from the player's perspective.
+/// World is wider than the visible viewport so the camera can scroll instead
+/// of wrapping at the screen edge. The X axis is toroidal (see
+/// `util::wrap_coord`); the client camera follows the local player and draws
+/// each entity at up to three positions (`x`, `x ± WORLD_WIDTH`) so the wrap
+/// is invisible from the player's perspective.
 pub const WORLD_WIDTH: f32 = 3200.0;
-/// Visible viewport height in world units. Fixed regardless of the actual
-/// display resolution — the screen just letterboxes or stretches to this
-/// aspect ratio. The world is taller (see `WORLD_HEIGHT`) so the camera
-/// scrolls vertically as the player climbs.
+/// Visible viewport height in world units. Fixed regardless of display
+/// resolution — the screen letterboxes / stretches to this aspect ratio.
 pub const VIEW_HEIGHT: f32 = 540.0;
-/// Total play-area height in world units. Y-up: `0` is the world floor
-/// (the ground band's surface sits in `[GROUND_MIN_HEIGHT,
-/// GROUND_MAX_HEIGHT]`) and `WORLD_HEIGHT` is the ceiling. We extend
-/// the world one viewport above the base play area so pilots have
-/// ~`VIEW_HEIGHT` of vertical headroom to climb into.
+/// Total play-area height in world units (Y-up). `0` is the floor (ground
+/// surface lives in `[GROUND_MIN_HEIGHT, GROUND_MAX_HEIGHT]`) and
+/// `WORLD_HEIGHT` is the ceiling. We extend the world one viewport above
+/// the base play area so pilots have headroom to climb into.
 pub const WORLD_HEIGHT: f32 = VIEW_HEIGHT * 2.0;
 
-/// Default spawn altitude. Sits well above the visible viewport floor
-/// so a fresh pilot has plenty of vertical headroom before gravity (or
-/// a tank shell) becomes a problem. Used by `add_player` /
-/// `respawn_player`. Paired with `Entity::gravity_armed`, which keeps
-/// the ship motionless until the player thrusts for the first time —
-/// so the spawn position is also where the pilot waits.
+/// Default spawn altitude. Sits well above the visible viewport floor so a
+/// fresh pilot has plenty of headroom before gravity (or a tank shell)
+/// becomes a problem. Paired with `Entity::gravity_armed`, which keeps the
+/// ship motionless until the player thrusts for the first time — so the
+/// spawn position is also where the pilot waits.
 pub const SPAWN_Y: f32 = VIEW_HEIGHT * 1.2;
 
 pub const SHOT_BBOX: f32 = 6.0;
@@ -54,8 +49,8 @@ pub const SHOT_LIFE: f32 = 2.0;
 /// pilot never has to deal with one materialising in their lap.
 pub const ENEMY_SAFE_SPAWN_RADIUS: f32 = 380.0;
 
-/// Hostiles within this radius of a (re)spawning player are nudged out
-/// so the player isn't killed on the same tick they appear.
+/// Hostiles within this radius of a (re)spawning player are nudged out so
+/// the player isn't killed on the same tick they appear.
 pub const SAFE_SPAWN_RADIUS: f32 = 80.0;
 
 #[derive(Debug, Clone, Copy)]
@@ -151,8 +146,8 @@ impl World {
     }
 
     /// Spawn a player horizontally centered at `SPAWN_Y`. No-op if already
-    /// present. Pushes any enemies inside `SAFE_SPAWN_RADIUS` out of the
-    /// way so the new ship isn't killed on the same tick it appears.
+    /// present. Pushes any hostiles inside `SAFE_SPAWN_RADIUS` out of the way
+    /// so the new ship isn't killed on the same tick it appears.
     pub fn add_player(&mut self, player_id: PlayerId) -> Option<EntityId> {
         if self.players.contains_key(&player_id) {
             return None;
@@ -167,11 +162,11 @@ impl World {
         Some(id)
     }
 
-    /// Put a dead player back in the world and reset the hostile state so
-    /// they aren't dropped into mid-battle. Wipes existing enemies, tanks,
-    /// and shots, drops the level back to 1, resets the spawn director, and
-    /// spawns a fresh starting wave at safe distance. Other live players
-    /// stay put — their entities and scores are preserved.
+    /// Put a dead player back in the world and reset the hostile state so they
+    /// aren't dropped into mid-battle. Wipes existing enemies, tanks, and
+    /// shots, drops the level back to 1, resets the spawn director, and spawns
+    /// a fresh starting wave at safe distance. Other live players stay put —
+    /// their entities and scores are preserved.
     pub fn respawn_player(&mut self, player_id: PlayerId) -> Option<EntityId> {
         if self.players.contains_key(&player_id) {
             return None;
@@ -185,9 +180,9 @@ impl World {
         id
     }
 
-    /// Push hostiles out of a disc so a freshly-spawned player isn't
-    /// standing on top of one. They're moved to the disc edge along the
-    /// radial direction; velocity is preserved so the world keeps moving.
+    /// Push hostiles out of a disc so a freshly-spawned player isn't standing
+    /// on top of one. They're moved to the disc edge along the radial
+    /// direction; velocity is preserved so the world keeps moving.
     fn clear_safe_zone(&mut self, center: Vec2, radius: f32) {
         for entity in self.entities.values_mut() {
             let hostile = matches!(entity.kind, EntityKind::Enemy | EntityKind::Tank);
@@ -199,8 +194,8 @@ impl World {
             if dist >= radius {
                 continue;
             }
-            // Pick an outward direction; if the enemy is exactly at the
-            // center, kick it along +x so the math is well-defined.
+            // Outward direction; if the hostile is exactly at the center, kick
+            // it along +X so the math is well-defined.
             let dir = if dist > 1e-3 {
                 offset / dist
             } else {
@@ -241,8 +236,8 @@ impl World {
             entity.vel = vel;
             entity.facing = facing;
             entity.thrusting = input.yaxis > 0.0;
-            // First thrust input arms gravity for the rest of this life.
-            // Stays on through respawn; `Entity::player` resets it to false.
+            // First thrust input arms gravity for the rest of this life. Stays
+            // on through respawn; `Entity::player` resets it to false.
             if input.yaxis > 0.0 {
                 entity.gravity_armed = true;
             }
@@ -251,14 +246,16 @@ impl World {
 
             if input.fire && entity.shot_cooldown <= 0.0 {
                 entity.shot_cooldown = PLAYER_SHOT_TIME;
-                let direction = util::vec_from_angle(facing);
-                let spawn_pos = entity.pos + direction * player::PLAYER_BBOX;
-                let shot_id = EntityId(self.next_entity_id);
-                self.next_entity_id += 1;
-                let owner = ShotOwner::Player(player_id);
-                let shot = Entity::shot(shot_id, owner, spawn_pos, direction * SHOT_SPEED, facing);
-                events.push(GameEvent::ShotFired { owner, pos: spawn_pos });
-                new_shots.push(shot);
+                let pos = entity.pos;
+                new_shots.push(fire_bullet(
+                    &mut self.next_entity_id,
+                    pos,
+                    facing,
+                    ShotOwner::Player(player_id),
+                    player::PLAYER_BBOX,
+                    SHOT_SPEED,
+                    &mut events,
+                ));
             }
         }
         for shot in new_shots {
@@ -269,19 +266,9 @@ impl World {
         // toward it, and may fire. Snapshotting target positions before
         // mutating means the order of enemies in the BTreeMap doesn't
         // affect the AI decisions on this tick.
-        let player_targets: Vec<Vec2> = self
-            .entities
-            .values()
-            .filter(|e| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
-            .map(|e| e.pos)
-            .collect();
+        let player_targets = self.live_player_positions();
         let world_width = self.config.world_size.x;
-        let enemy_eids: Vec<EntityId> = self
-            .entities
-            .iter()
-            .filter(|(_, e)| matches!(e.kind, EntityKind::Enemy) && e.alive)
-            .map(|(id, _)| *id)
-            .collect();
+        let enemy_eids = self.live_ids_matching(|e| matches!(e.kind, EntityKind::Enemy));
         let mut enemy_shots: Vec<Entity> = Vec::new();
         for eid in enemy_eids {
             let Some(entity) = self.entities.get_mut(&eid) else {
@@ -295,20 +282,17 @@ impl World {
 
             if step.fire && entity.shot_cooldown <= 0.0 {
                 entity.shot_cooldown = ENEMY_SHOT_TIME;
-                let direction = util::vec_from_angle(entity.facing);
-                let spawn_pos = entity.pos + direction * enemy::ENEMY_BBOX;
-                let shot_id = EntityId(self.next_entity_id);
-                self.next_entity_id += 1;
-                let owner = ShotOwner::Enemy;
-                let shot = Entity::shot(
-                    shot_id,
-                    owner,
-                    spawn_pos,
-                    direction * ENEMY_SHOT_SPEED,
-                    entity.facing,
-                );
-                events.push(GameEvent::ShotFired { owner, pos: spawn_pos });
-                enemy_shots.push(shot);
+                let pos = entity.pos;
+                let facing = entity.facing;
+                enemy_shots.push(fire_bullet(
+                    &mut self.next_entity_id,
+                    pos,
+                    facing,
+                    ShotOwner::Enemy,
+                    enemy::ENEMY_BBOX,
+                    ENEMY_SHOT_SPEED,
+                    &mut events,
+                ));
             }
         }
         for shot in enemy_shots {
@@ -321,12 +305,7 @@ impl World {
         // lead built into `tank::step`. Identical pattern to enemy AI
         // so a future player-controlled tank only has to replace the
         // `target` selection.
-        let tank_eids: Vec<EntityId> = self
-            .entities
-            .iter()
-            .filter(|(_, e)| matches!(e.kind, EntityKind::Tank) && e.alive)
-            .map(|(id, _)| *id)
-            .collect();
+        let tank_eids = self.live_ids_matching(|e| matches!(e.kind, EntityKind::Tank));
         let mut tank_shots: Vec<Entity> = Vec::new();
         // Current sim time used to drive each tank's dodge oscillator. The
         // per-entity offset (id * 0.83) keeps neighbouring tanks out of
@@ -355,43 +334,40 @@ impl World {
 
             if step.fire && entity.shot_cooldown <= 0.0 {
                 entity.shot_cooldown = TANK_SHOT_TIME;
+                // Spawn the shell at the end of the barrel so the tank
+                // doesn't immediately collide with its own shot.
                 let direction = util::vec_from_angle(entity.turret_facing);
-                // Spawn the shell at the end of the barrel, well clear of
-                // the chassis so the tank doesn't immediately collide
-                // with its own shot.
                 let spawn_pos = entity.pos + direction * (entity.bbox + 6.0);
+                let turret = entity.turret_facing;
                 let shot_id = EntityId(self.next_entity_id);
                 self.next_entity_id += 1;
                 let owner = ShotOwner::Tank;
-                let shell = Entity::artillery_shot(
+                tank_shots.push(Entity::artillery_shot(
                     shot_id,
                     owner,
                     spawn_pos,
                     direction * TANK_SHOT_SPEED,
-                    entity.turret_facing,
+                    turret,
                     Vec2::new(0.0, -TANK_SHOT_GRAVITY),
                     TANK_SHOT_BBOX,
                     TANK_SHELL_LIFE,
                     Some(eid),
-                );
+                ));
                 events.push(GameEvent::ShotFired { owner, pos: spawn_pos });
-                tank_shots.push(shell);
             }
         }
         for shot in tank_shots {
             self.entities.insert(shot.id, shot);
         }
 
-        // 2. Move + wrap + per-kind extras.
-        // X is toroidal (you can fly off the right edge and come in on
-        // the left). Y is a hard wall — players clamp against it and
-        // enemies/shots bounce. Shots and enemies bounce off the local
-        // terrain surface (per-x height) so ricochets follow the hills
-        // rather than tracking a global max height. Shots flagged with
-        // `detonates_on_terrain` (artillery) detonate instead of bouncing;
-        // their impact positions are collected and emitted as
-        // `ShellExploded` events after the loop so the borrow stays
-        // simple inside.
+        // 2. Move + wrap + per-kind extras. X is toroidal (fly off the right
+        // edge and come back on the left); Y is a hard wall — players clamp,
+        // enemies and shots bounce. Bouncers use the local terrain surface
+        // (per-x height) so ricochets follow the hills instead of tracking the
+        // tallest peak. Shots flagged `detonates_on_terrain` (artillery)
+        // detonate instead of bouncing; their impact positions are emitted as
+        // `ShellExploded` events after the loop so the borrow stays simple
+        // inside.
         let world_size = self.config.world_size;
         let mut detonations: Vec<Vec2> = Vec::new();
         for entity in self.entities.values_mut() {
@@ -422,9 +398,9 @@ impl World {
                         continue;
                     }
                     // Player bullets are absorbed by terrain instead of
-                    // ricocheting; otherwise downward shots arc back at
-                    // the pilot. Enemy bullets keep the bouncing behavior
-                    // so they still skim along the hills.
+                    // ricocheting; otherwise downward shots arc back at the
+                    // pilot. Enemy bullets keep bouncing so they still skim
+                    // along the hills.
                     if matches!(owner, ShotOwner::Player(_)) && entity.pos.y <= floor {
                         entity.alive = false;
                         continue;
@@ -433,8 +409,8 @@ impl World {
                     // (plus the shot's own radius) so it doesn't sink in
                     // before reflecting.
                     util::bounce_y(&mut entity.pos, &mut entity.vel, floor, world_size.y);
-                    // Apply any per-shot acceleration (tank shells use
-                    // this for gravity). Done after bounce so the bounce
+                    // Per-shot acceleration (tank shells use this for
+                    // gravity). Applied after the bounce so the bounce
                     // reverses pre-gravity velocity.
                     if entity.accel != Vec2::ZERO {
                         entity.vel += entity.accel * dt;
@@ -447,20 +423,18 @@ impl World {
                     }
                 }
                 EntityKind::Enemy => {
-                    // Enemies bounce off the same local surface as shots
-                    // so they skim along hills instead of tracking the
-                    // tallest peak in the world.
+                    // Enemies bounce off the same local surface as shots so
+                    // they skim along hills instead of tracking the tallest
+                    // peak in the world.
                     let floor = terrain::surface_y_at(entity.pos.x, &self.terrain) + entity.bbox;
                     util::bounce_y(&mut entity.pos, &mut entity.vel, floor, world_size.y);
                 }
                 EntityKind::Tank => {
-                    // Tank chassis is locked to the terrain surface.
-                    // Vertical velocity is killed in `tank::step`; we
-                    // still pin Y here in case anything else perturbs
-                    // it (collisions, external nudges). The chassis
-                    // mesh is authored with its center at `pos`, so we
-                    // raise `pos.y` by the per-kind ground offset (not
-                    // by the collision radius — those are decoupled).
+                    // Tank chassis is locked to the terrain surface. Vertical
+                    // velocity is zeroed in `tank::step`; we still pin Y here
+                    // in case anything else perturbs it (collisions, external
+                    // nudges). `pos.y` is raised by `TANK_GROUND_OFFSET`
+                    // (decoupled from the collision radius).
                     let ground = terrain::ground_surface_at(entity.pos.x, &self.terrain);
                     entity.pos.y = ground + TANK_GROUND_OFFSET;
                     entity.vel.y = 0.0;
@@ -471,14 +445,13 @@ impl World {
             events.push(GameEvent::ShellExploded { pos });
         }
 
-        // 2b. Terrain. A player whose hitbox dips into a terrain band
-        // crashes there. Done before entity-vs-entity collision so a
-        // player who somehow rams an enemy and the ground in the same
-        // tick is recorded as a terrain crash (the ground has the last
-        // word when both fire — minor, but we want to be deterministic).
+        // 2b. Terrain. A player whose hitbox dips into a terrain band crashes
+        // there. Done before entity-vs-entity collision so a player who rams
+        // both an enemy and the ground in the same tick is recorded as a
+        // terrain crash (deterministic tiebreak).
         self.handle_terrain(&mut events);
 
-        // 3. Collisions. Iteration is over BTreeMap so order is deterministic.
+        // 3. Collisions. BTreeMap iteration is deterministic.
         self.handle_collisions(&mut events, dt);
 
         // 3b. HP regen for live players.
@@ -501,10 +474,10 @@ impl World {
         }
 
         // 5. Wave director. Levels run on a wall-clock timer (see
-        // `wave::level_duration`) and the director also decides when to
-        // push fresh hostiles into the world. We only tick it while
-        // someone is alive to fight — an empty world freezes the level
-        // counter and the spawn timers so nothing is wasted.
+        // `wave::level_duration`) and the director also decides when to push
+        // fresh hostiles into the world. Only ticked while someone is alive to
+        // fight — an empty world freezes the level counter and the spawn
+        // timers so nothing is wasted.
         if !self.players.is_empty() {
             let alive = self.alive_hostile_counts();
             let step = self.director.step(self.level, dt, alive);
@@ -525,12 +498,8 @@ impl World {
     }
 
     fn handle_terrain(&mut self, events: &mut Vec<GameEvent>) {
-        let player_eids: Vec<EntityId> = self
-            .entities
-            .iter()
-            .filter(|(_, e)| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
-            .map(|(id, _)| *id)
-            .collect();
+        let player_eids =
+            self.live_ids_matching(|e| matches!(e.kind, EntityKind::Player { .. }));
         for eid in player_eids {
             let Some(entity) = self.entities.get_mut(&eid) else {
                 continue;
@@ -545,10 +514,9 @@ impl World {
                 EntityKind::Player { player_id } => player_id,
                 _ => continue,
             };
-            // Pin the impact point to the player's X but the band's
-            // local surface Y so the client can draw the boom sitting
-            // on the ground rather than half-buried (and so explosions
-            // land on the hillside, not the highest peak in the world).
+            // Pin the impact to the player's X but the band's local surface Y
+            // so the client draws the boom sitting on the hillside rather than
+            // half-buried at the world's tallest peak.
             let surface_y = self
                 .terrain
                 .iter()
@@ -566,49 +534,27 @@ impl World {
     }
 
     fn handle_collisions(&mut self, events: &mut Vec<GameEvent>, dt: f32) {
-        // Treat ships and tanks as one bucket: both die from ramming the
-        // player, and both lose HP from player shots (tanks just have
-        // more HP to spend). New hostile kinds plug into the same logic
-        // by joining this filter.
-        let hostile_ids: Vec<EntityId> = self
-            .entities
-            .iter()
-            .filter(|(_, e)| {
-                matches!(e.kind, EntityKind::Enemy | EntityKind::Tank) && e.alive
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        let player_ids: Vec<EntityId> = self
-            .entities
-            .iter()
-            .filter(|(_, e)| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
-            .map(|(id, _)| *id)
-            .collect();
-        let player_shot_ids: Vec<EntityId> = self
-            .entities
-            .iter()
-            .filter(|(_, e)| {
-                matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Player(_) }) && e.alive
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        let enemy_shot_ids: Vec<EntityId> = self
-            .entities
-            .iter()
-            .filter(|(_, e)| match e.kind {
-                EntityKind::Shot { owner } => owner.is_hostile() && e.alive,
-                _ => false,
-            })
-            .map(|(id, _)| *id)
-            .collect();
+        // Treat ships and tanks as one bucket: both lose HP from player shots
+        // and both deal contact damage. New hostile kinds plug into the same
+        // logic by joining the `hostile_ids` filter below.
+        let hostile_ids =
+            self.live_ids_matching(|e| matches!(e.kind, EntityKind::Enemy | EntityKind::Tank));
+        let player_ids =
+            self.live_ids_matching(|e| matches!(e.kind, EntityKind::Player { .. }));
+        let player_shot_ids = self.live_ids_matching(
+            |e| matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Player(_) }),
+        );
+        let enemy_shot_ids = self.live_ids_matching(|e| match e.kind {
+            EntityKind::Shot { owner } => owner.is_hostile(),
+            _ => false,
+        });
 
-        // Player ↔ hostile contact: continuous damage instead of instant
-        // kill. Each tick of overlap drains `RAM_DAMAGE_PER_SECOND * dt`
-        // off both sides; a full-HP pilot can therefore survive
-        // `player::RAM_DEATH_SECONDS` of constant contact before exploding.
-        // The same rate flows back into the hostile so a brief brush
-        // still wipes weak ships (1 HP) almost instantly while heavier
-        // chassis take proportionally longer to chew through.
+        // Player ↔ hostile contact: continuous damage instead of an instant
+        // kill. Each overlapping tick drains `RAM_DAMAGE_PER_SECOND * dt` off
+        // both sides, so a full-HP pilot survives `RAM_DEATH_SECONDS` of
+        // constant contact before exploding. The same rate flows back into the
+        // hostile — a brief brush wipes weak ships (1 HP) almost instantly,
+        // heavier chassis take proportionally longer.
         let mut contacted_players: BTreeSet<EntityId> = BTreeSet::new();
         let mut contacted_hostiles: BTreeSet<EntityId> = BTreeSet::new();
         let dose = RAM_DAMAGE_PER_SECOND * dt;
@@ -691,9 +637,9 @@ impl World {
             }
         }
 
-        // Players/hostiles that ended the tick without an overlapping
-        // partner reset their accumulator so a sequence of brief touches
-        // doesn't silently compound into a kill.
+        // Anyone who ended the tick without an overlapping partner resets
+        // their accumulator so a sequence of brief touches doesn't silently
+        // compound into a kill.
         for id in &player_ids {
             if !contacted_players.contains(id) {
                 if let Some(e) = self.entities.get_mut(id) {
@@ -749,12 +695,10 @@ impl World {
         }
 
         // Hostile shot ↔ player: shot dies; player loses HP based on the
-        // shot's owner (`ShotOwner::damage`). Repeat hits within
-        // `PLAYER_REGEN_DELAY` stack, so a focused volley still drops the
-        // pilot. Tank shells deal more per hit, so a single shell can
-        // remove a chunk of HP — and they also emit a `ShellExploded`
-        // event so the client can render the boom on top of the damage
-        // feedback.
+        // shot's owner (`ShotOwner::damage`). Hits within `PLAYER_REGEN_DELAY`
+        // stack so a focused volley still drops the pilot. Tank shells chip
+        // more HP per hit and also emit `ShellExploded` so the client can
+        // render the boom alongside the damage feedback.
         for shot_id in &enemy_shot_ids {
             for player_id in &player_ids {
                 let hit = match (self.entities.get(shot_id), self.entities.get(player_id)) {
@@ -809,22 +753,16 @@ impl World {
             }
         }
 
-        // Tank shell ↔ other hostile: friendly fire. A shell that lands
-        // on another tank or ship enemy detonates and deducts HP using
-        // the same damage curve as a hit on the player. The shell skips
-        // the entity that fired it (via `source`) so a freshly-spawned
-        // shell can't detonate on its own chassis. Friendly-fire kills
-        // emit `EnemyKilled` with `killer: None` so the score logic
-        // ignores them — only player-fired shots and rams credit a
-        // score.
-        let shell_ids: Vec<EntityId> = self
-            .entities
-            .iter()
-            .filter(|(_, e)| {
-                matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Tank }) && e.alive
-            })
-            .map(|(id, _)| *id)
-            .collect();
+        // Tank shell ↔ other hostile: friendly fire. A shell that lands on
+        // another tank or ship enemy detonates and deducts HP using the same
+        // damage curve as a hit on the player. The shell skips the entity that
+        // fired it (via `source`) so a freshly-spawned shell can't detonate on
+        // its own chassis. Friendly-fire kills emit `EnemyKilled` with
+        // `killer: None` so the score logic ignores them — only player shots
+        // and rams credit a score.
+        let shell_ids = self.live_ids_matching(
+            |e| matches!(e.kind, EntityKind::Shot { owner: ShotOwner::Tank }),
+        );
         for shell_id in &shell_ids {
             let (shell_source, shell_pos, shell_bbox) = match self.entities.get(shell_id) {
                 Some(s) if s.alive => (s.source, s.pos, s.bbox),
@@ -865,7 +803,7 @@ impl World {
     }
 
     /// Tick the regen clock on every live player. After `PLAYER_REGEN_DELAY`
-    /// of damage-free flight, HP starts climbing back at one tick every
+    /// of damage-free flight, HP climbs back one tick every
     /// `PLAYER_REGEN_INTERVAL` seconds. Called once per world tick.
     fn handle_regen(&mut self, dt: f32) {
         for entity in self.entities.values_mut() {
@@ -887,8 +825,8 @@ impl World {
         }
     }
 
-    /// Tally alive ship/tank counts in a single pass. Cheap and the
-    /// allocation-free shape is convenient for the wave director.
+    /// Tally alive ship/tank counts in one pass. Allocation-free so it's
+    /// cheap to call every tick.
     fn alive_hostile_counts(&self) -> AliveCounts {
         let (enemies, tanks) = self.entities.values().fold((0, 0), |(e, t), entity| {
             if !entity.alive {
@@ -913,35 +851,29 @@ impl World {
     }
 
     /// Spawn one enemy well outside any live player's view so it flies in
-    /// from off-screen rather than appearing on top of them. We retry a
-    /// handful of times if the rolled position falls inside the safe
-    /// radius around any player, then accept the last attempt. RNG draws
-    /// per call are bounded so determinism is preserved.
+    /// from off-screen rather than appearing on top of them. Retries up to
+    /// `MAX_ATTEMPTS` if the rolled position falls inside the safe radius,
+    /// then accepts the last attempt. RNG draws per call are bounded so
+    /// determinism is preserved.
     fn spawn_enemy(&mut self) {
         let world = self.config.world_size;
-        let player_positions: Vec<Vec2> = self
-            .entities
-            .values()
-            .filter(|e| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
-            .map(|e| e.pos)
-            .collect();
+        let player_positions = self.live_player_positions();
 
-        // Up to 8 attempts to find a player-clear spot. Each attempt
-        // consumes the same number of RNG draws so the determinism
-        // contract holds — same world state in, same attempts out.
+        // Each attempt consumes the same number of RNG draws so the
+        // determinism contract holds — same world state in, same attempts out.
         const MAX_ATTEMPTS: usize = 8;
         let mut chosen = Vec2::ZERO;
         for attempt in 0..MAX_ATTEMPTS {
             let x = util::rand_unit(&mut self.rng) * world.x;
-            // Vertical: spread across most of the playable altitude band
-            // so the camera's new vertical headroom actually carries
-            // enemies, not just empty sky. Keep clear of the top/bottom
-            // margins so they're not pinned against a wall.
+            // Spread across most of the playable altitude band so the
+            // camera's vertical headroom actually carries enemies, not just
+            // empty sky. Keep clear of the top/bottom margins so they're not
+            // pinned against a wall.
             let y = 60.0 + util::rand_unit(&mut self.rng) * (world.y - 120.0);
             let pos = Vec2::new(x, y);
             let safe = player_positions
                 .iter()
-                .all(|p| toroidal_dist(pos, *p, world.x) >= ENEMY_SAFE_SPAWN_RADIUS);
+                .all(|p| util::toroidal_distance(pos, *p, world.x) >= ENEMY_SAFE_SPAWN_RADIUS);
             if safe || attempt == MAX_ATTEMPTS - 1 {
                 chosen = pos;
                 if safe {
@@ -956,19 +888,14 @@ impl World {
         self.entities.insert(id, enemy);
     }
 
-    /// Spawn one tank rolling on the ground at a player-safe X. Same
-    /// retry shape as `spawn_enemy` so determinism is preserved; we just
-    /// roll an X and pin the Y to the terrain surface. Skips X-ranges
-    /// that are not passable for ground vehicles (no-op today; future
-    /// water bands will start filtering here).
+    /// Spawn one tank rolling on the ground at a player-safe X. Same retry
+    /// shape as `spawn_enemy` so determinism is preserved; we just roll an X
+    /// and pin the Y to the terrain surface. Skips X-ranges that aren't
+    /// passable for ground vehicles (no-op today; future water bands will
+    /// start filtering here).
     fn spawn_tank(&mut self) {
         let world = self.config.world_size;
-        let player_positions: Vec<Vec2> = self
-            .entities
-            .values()
-            .filter(|e| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
-            .map(|e| e.pos)
-            .collect();
+        let player_positions = self.live_player_positions();
 
         const MAX_ATTEMPTS: usize = 8;
         let mut chosen_x = 0.0_f32;
@@ -979,7 +906,7 @@ impl World {
             let passable = terrain::passable_for_ground_vehicle(x, &self.terrain);
             let safe = player_positions
                 .iter()
-                .all(|p| toroidal_dist(probe, *p, world.x) >= ENEMY_SAFE_SPAWN_RADIUS);
+                .all(|p| util::toroidal_distance(probe, *p, world.x) >= ENEMY_SAFE_SPAWN_RADIUS);
             if passable && (safe || attempt == MAX_ATTEMPTS - 1) {
                 chosen_x = x;
                 if safe {
@@ -999,39 +926,58 @@ impl World {
         self.next_entity_id += 1;
         id
     }
+
+    /// World positions of every live player. Used by AI and by spawn logic
+    /// that wants to avoid materialising on top of someone.
+    fn live_player_positions(&self) -> Vec<Vec2> {
+        self.entities
+            .values()
+            .filter(|e| matches!(e.kind, EntityKind::Player { .. }) && e.alive)
+            .map(|e| e.pos)
+            .collect()
+    }
+
+    /// Collect the IDs of every alive entity matching `pred`. Used by the
+    /// collision and AI passes to grab a snapshot of which IDs to walk
+    /// before they start mutating the entity table.
+    fn live_ids_matching<F: Fn(&Entity) -> bool>(&self, pred: F) -> Vec<EntityId> {
+        self.entities
+            .iter()
+            .filter(|(_, e)| e.alive && pred(e))
+            .map(|(id, _)| *id)
+            .collect()
+    }
 }
 
-/// Pick the closest target position from `candidates`, accounting for X-wrap.
-/// Returns `None` when the slice is empty.
+/// Build a regular (non-artillery) bullet and queue the matching
+/// `ShotFired` event. Takes a `&mut u64` for the id counter rather than
+/// `&mut World` so it can be called inside a loop that already borrows
+/// `World::entities`.
+fn fire_bullet(
+    next_entity_id: &mut u64,
+    pos: Vec2,
+    facing: f32,
+    owner: ShotOwner,
+    offset: f32,
+    speed: f32,
+    events: &mut Vec<GameEvent>,
+) -> Entity {
+    let direction = util::vec_from_angle(facing);
+    let spawn_pos = pos + direction * offset;
+    let id = EntityId(*next_entity_id);
+    *next_entity_id += 1;
+    events.push(GameEvent::ShotFired { owner, pos: spawn_pos });
+    Entity::shot(id, owner, spawn_pos, direction * speed, facing)
+}
+
+/// Pick the closest target position from `candidates`, accounting for
+/// X-wrap. Returns `None` when the slice is empty.
 fn nearest_target(from: Vec2, candidates: &[Vec2], world_width: f32) -> Option<Vec2> {
-    let mut best: Option<(f32, Vec2)> = None;
-    let half = world_width * 0.5;
-    for &c in candidates {
-        let mut dx = c.x - from.x;
-        if dx > half {
-            dx -= world_width;
-        } else if dx < -half {
-            dx += world_width;
-        }
-        let dy = c.y - from.y;
-        let d2 = dx * dx + dy * dy;
-        match best {
-            Some((bd, _)) if bd <= d2 => {}
-            _ => best = Some((d2, c)),
-        }
-    }
-    best.map(|(_, c)| c)
-}
-
-/// Shortest distance between two points accounting for X-wrap.
-fn toroidal_dist(a: Vec2, b: Vec2, world_width: f32) -> f32 {
-    let half = world_width * 0.5;
-    let mut dx = (a.x - b.x).abs();
-    if dx > half {
-        dx = world_width - dx;
-    }
-    let dy = a.y - b.y;
-    (dx * dx + dy * dy).sqrt()
+    candidates
+        .iter()
+        .map(|&c| (util::toroidal_offset(from, c, world_width).length_squared(), c))
+        .min_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, c)| c)
 }
 
 #[cfg(test)]
@@ -2016,7 +1962,7 @@ mod tests {
                 let player_pos = world.player_entity(pid).unwrap().pos;
                 for (_, e) in world.entities_map() {
                     if matches!(e.kind, EntityKind::Enemy | EntityKind::Tank) {
-                        let d = toroidal_dist(e.pos, player_pos, WORLD_WIDTH);
+                        let d = util::toroidal_distance(e.pos, player_pos, WORLD_WIDTH);
                         assert!(
                             d >= ENEMY_SAFE_SPAWN_RADIUS - 1.0,
                             "enemy spawned too close to player: d={d} radius={ENEMY_SAFE_SPAWN_RADIUS}"

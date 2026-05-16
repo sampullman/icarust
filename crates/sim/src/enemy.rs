@@ -1,13 +1,11 @@
-//! Simple chase-and-fire enemy AI. Picks the nearest live player, faces them,
-//! thrusts when roughly aligned, and fires when
-//! aligned and within range. No gravity — enemies cruise around like
-//! drones, not like the player ship.
+//! Simple chase-and-fire enemy AI. Picks the nearest live player, faces
+//! them, thrusts when roughly aligned, and fires when aligned and in range.
+//! No gravity — enemies cruise around like drones, not like the player ship.
 //!
 //! All math is pure and deterministic: it reads only entity state and
 //! returns the new `(velocity, facing, fire?)`. World mutation (spawning
-//! shots, advancing cooldown) lives in `world::tick`.
-
-use std::f32::consts::{PI, TAU};
+//! shots, advancing cooldown) lives in `world::tick`. Toroidal/angular
+//! helpers live in `crate::util` and are shared with `tank::step`.
 
 use crate::util::{self, Vec2};
 
@@ -67,22 +65,22 @@ pub fn step(
         };
     };
 
-    let to_target = shortest_offset(pos, target_pos, world_width);
+    let to_target = util::toroidal_offset(pos, target_pos, world_width);
     let dist = to_target.length();
 
+    // `atan2(dx, dy)` matches our (sin, cos) facing convention: a target
+    // straight up (+Y) gives angle 0.
+    let target_angle = to_target.x.atan2(to_target.y);
     let new_facing = if dist > 1e-3 {
-        // atan2(dx, dy) matches our (sin, cos) facing convention: a target
-        // straight up (+Y) gives angle 0.
-        let target_angle = to_target.x.atan2(to_target.y);
-        steer_toward(facing, target_angle, ENEMY_TURN_RATE * dt)
+        util::steer_toward_angle(facing, target_angle, ENEMY_TURN_RATE * dt)
     } else {
         facing
     };
 
-    // Thrust if we're roughly pointed at the target. The cone is wider
-    // than the firing cone so the enemy keeps closing distance even when
-    // it isn't dead-on aligned.
-    let aim_error = angular_delta(new_facing, to_target.x.atan2(to_target.y)).abs();
+    // Thrust if we're roughly pointed at the target. The cone is wider than
+    // the firing cone so the enemy keeps closing distance even when it
+    // isn't dead-on aligned.
+    let aim_error = util::signed_angular_delta(new_facing, target_angle).abs();
     let mut new_vel = vel;
     if aim_error < ENEMY_FIRE_CONE * 3.0 {
         new_vel += util::vec_from_angle(new_facing) * ENEMY_THRUST * dt;
@@ -101,36 +99,6 @@ pub fn step(
     }
 }
 
-/// Shortest vector from `from` to `to`, accounting for X-wrap.
-fn shortest_offset(from: Vec2, to: Vec2, world_width: f32) -> Vec2 {
-    let mut dx = to.x - from.x;
-    let half = world_width * 0.5;
-    if dx > half {
-        dx -= world_width;
-    } else if dx < -half {
-        dx += world_width;
-    }
-    Vec2::new(dx, to.y - from.y)
-}
-
-/// Shortest signed angular delta `target - current` in `[-PI, PI]`.
-fn angular_delta(current: f32, target: f32) -> f32 {
-    let mut d = (target - current) % TAU;
-    if d > PI {
-        d -= TAU;
-    } else if d < -PI {
-        d += TAU;
-    }
-    d
-}
-
-/// Step `current` toward `target` by at most `max_step` radians.
-fn steer_toward(current: f32, target: f32, max_step: f32) -> f32 {
-    let delta = angular_delta(current, target);
-    let step = delta.clamp(-max_step, max_step);
-    current + step
-}
-
 fn apply_drag(vel: Vec2, dt: f32) -> Vec2 {
     vel * (1.0 - ENEMY_DRAG * dt).max(0.0)
 }
@@ -138,6 +106,7 @@ fn apply_drag(vel: Vec2, dt: f32) -> Vec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::PI;
 
     #[test]
     fn idles_when_no_target() {
@@ -194,9 +163,14 @@ mod tests {
     }
 
     #[test]
-    fn shortest_offset_wraps_x() {
-        // From x=10 to x=1270 on a 1280-wide world: short path is -20, not +1260.
-        let off = shortest_offset(Vec2::new(10.0, 0.0), Vec2::new(1270.0, 0.0), 1280.0);
-        assert!((off.x - -20.0).abs() < 1e-3, "got {}", off.x);
+    fn fires_across_wrap_seam() {
+        // Place the enemy near the right edge of a 1280-wide world with the
+        // target just past it on the left side. The short path crosses the
+        // seam, so the enemy must face +Y (target_angle ~ 0) and want to
+        // fire — proving `util::toroidal_offset` is wired through.
+        let pos = Vec2::new(1270.0, 100.0);
+        let target = Vec2::new(10.0, 100.0 + ENEMY_FIRE_RANGE * 0.4);
+        let s = step(pos, Vec2::ZERO, 0.0, Some(target), 1280.0, 1.0 / 60.0);
+        assert!(s.fire, "enemy should fire across the X seam");
     }
 }

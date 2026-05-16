@@ -1,15 +1,53 @@
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::f32::consts::{PI, TAU};
 
 pub type Vec2 = glam::Vec2;
 
-/// Unit vector for `angle` radians.
-///
-/// World space is Y-up. The convention is `(sin, cos)` so `facing == 0`
-/// points along +Y. Increasing `angle` rotates clockwise on screen,
-/// matching ggez's `DrawParam::rotation` direction.
+/// Unit vector for `angle` radians. World space is Y-up; the convention is
+/// `(sin, cos)` so `facing == 0` points along +Y. Increasing `angle` rotates
+/// clockwise on screen, matching ggez's `DrawParam::rotation` direction.
 pub fn vec_from_angle(angle: f32) -> Vec2 {
     Vec2::new(angle.sin(), angle.cos())
+}
+
+/// Shortest vector from `from` to `to` accounting for X-wrap. Y is treated
+/// as a hard axis (no wrap). Used by AI to steer/aim toward a target across
+/// the world seam without taking the long way around.
+pub fn toroidal_offset(from: Vec2, to: Vec2, world_width: f32) -> Vec2 {
+    let half = world_width * 0.5;
+    let mut dx = to.x - from.x;
+    if dx > half {
+        dx -= world_width;
+    } else if dx < -half {
+        dx += world_width;
+    }
+    Vec2::new(dx, to.y - from.y)
+}
+
+/// Shortest Euclidean distance between two points accounting for X-wrap.
+pub fn toroidal_distance(a: Vec2, b: Vec2, world_width: f32) -> f32 {
+    toroidal_offset(a, b, world_width).length()
+}
+
+/// Shortest signed angular delta `target - current` in `[-PI, PI]`. Useful
+/// for picking a turn direction without doing the wrap math at every call
+/// site.
+pub fn signed_angular_delta(current: f32, target: f32) -> f32 {
+    let mut d = (target - current) % TAU;
+    if d > PI {
+        d -= TAU;
+    } else if d < -PI {
+        d += TAU;
+    }
+    d
+}
+
+/// Step `current` toward `target` by at most `max_step` radians, taking
+/// the shortest arc.
+pub fn steer_toward_angle(current: f32, target: f32, max_step: f32) -> f32 {
+    let delta = signed_angular_delta(current, target);
+    current + delta.clamp(-max_step, max_step)
 }
 
 /// Returns a uniformly-random unit-direction vector scaled by a

@@ -1,18 +1,18 @@
-//! Local-only particle systems for thrust flames and damage smoke.
-//!
-//! These are pure cosmetic effects driven by the latest snapshot — they
-//! aren't authoritative and don't need to be deterministic with the
-//! server. Particles are integrated on real wall-clock dt so they look
+//! Local-only particle systems for thrust flames and damage smoke. Pure
+//! cosmetic effects driven by the latest snapshot — not authoritative and not
+//! deterministic with the server. Integrated on wall-clock dt so they look
 //! the same regardless of the fixed-step input cadence.
 //!
 //! Two emitters:
 //!   * `ThrustEmitter` spits a flame trail behind any player whose
-//!     `thrusting` flag is true.
-//!   * `DamageSmoker` puffs brown smoke from any player whose HP is
-//!     below max — intensity scales with how hurt they are.
+//!     `thrusting` flag is set.
+//!   * `DamageSmoker` puffs brown smoke from any entity whose HP is below max
+//!     (players, ship enemies, tanks). Intensity scales with how hurt they
+//!     are; callers pass a per-class multiplier so heavy chassis can read
+//!     differently from a wounded ship.
 
 use ggez::glam::Vec2;
-use ggez::graphics::{self, Canvas, Color, DrawParam};
+use ggez::graphics::Color;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use sim::EntityId;
@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use crate::render::camera::Camera;
 use crate::render::entities::{FLAME_CORE_COLOR, FLAME_EDGE_COLOR, SMOKE_COLOR};
+use crate::render::instance_batch::InstanceQuadBatch;
 
 /// One particle. Positions/velocities are world-space (Y-up).
 #[derive(Debug, Clone, Copy)]
@@ -48,25 +49,14 @@ impl Particle {
         self.life <= 0.0
     }
 
-    fn draw(&self, canvas: &mut Canvas, camera: &Camera) {
+    /// Append this particle's current state to the shared batch. Handles
+    /// the wrap-seam fan-out so a single particle near the X edge still
+    /// contributes the right number of instances.
+    fn fill(&self, batch: &mut InstanceQuadBatch, camera: &Camera) {
         let t = (self.life / self.max_life).clamp(0.0, 1.0);
         let mut color = self.color;
         color.a = (t * 1.4).min(1.0);
-        let scale = camera.scale();
-        let world_x = self.pos.x;
-        // Particle may straddle a wrap seam — draw at every visible copy.
-        for cand in camera.world_x_offsets_for(world_x, self.radius).into_iter().flatten() {
-            let screen = camera.world_to_screen(Vec2::new(cand, self.pos.y));
-            let half = self.radius * scale;
-            let dest = Vec2::new(screen.x - half, screen.y - half);
-            canvas.draw(
-                &graphics::Quad,
-                DrawParam::new()
-                    .dest(dest)
-                    .scale([half * 2.0, half * 2.0])
-                    .color(color),
-            );
-        }
+        batch.push_world(camera, self.pos, self.radius, color);
     }
 }
 
@@ -163,9 +153,12 @@ impl ThrustEmitter {
         self.particles.retain(|p| !p.dead());
     }
 
-    pub fn draw(&self, canvas: &mut Canvas, camera: &Camera) {
+    /// Append every live particle to the shared batch. The caller flushes
+    /// the batch once, so the cost is one draw call regardless of how many
+    /// ships are thrusting.
+    pub fn fill(&self, batch: &mut InstanceQuadBatch, camera: &Camera) {
         for p in &self.particles {
-            p.draw(canvas, camera);
+            p.fill(batch, camera);
         }
     }
 }
@@ -289,9 +282,9 @@ impl DamageSmoker {
         self.particles.retain(|p| !p.dead());
     }
 
-    pub fn draw(&self, canvas: &mut Canvas, camera: &Camera) {
+    pub fn fill(&self, batch: &mut InstanceQuadBatch, camera: &Camera) {
         for p in &self.particles {
-            p.draw(canvas, camera);
+            p.fill(batch, camera);
         }
     }
 }
